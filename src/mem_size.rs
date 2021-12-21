@@ -42,8 +42,8 @@ use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
 /// A trait for types whose total size in memory can be determined at runtime.
-/// This is required for the [LruCache] to track the size of entries. It has
-/// implementations for most common data types and containers.
+/// This is required for the [LruCache](crate::LruCache) to track the size of
+/// entries. It has implementations for most common data types and containers.
 ///
 /// Note that reference-counting smart pointers deliberately do not implement
 /// this trait, as it is not clear whether a pointer will drop the referenced
