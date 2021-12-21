@@ -1,10 +1,10 @@
 [package]
 name = "lru-mem"
 description = "An LRU cache implementation bounded by memory."
-version = "0.1.1"
+version = "0.1.2"
 authors = [ "florian1345 <florian1345@gmx.de>" ]
 edition = "2021"
-documentation = "https://docs.rs/lru-mem/0.1.0/lru-mem/"
+documentation = "https://docs.rs/lru-mem/"
 license = "MIT OR Apache-2.0"
 categories = [ "data-structures" ]
 readme = "README.md"
