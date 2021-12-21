@@ -1,8 +1,9 @@
 # lru-mem
 
 An implementation of a memory-bounded LRU (least-recently-used) cache for Rust.
-It supports O(1) insert, get, and remove. There are also additional utility
-methods such as iterators, capacity management, and mutable access.
+It supports average-case O(1) insert, get, and remove. There are also
+additional utility methods such as iterators, capacity management, and mutable
+access.
 
 Note that the memory required for each entry is only an estimate and some
 auxiliary structure is disregarded. Therefore, the actual data structure can
