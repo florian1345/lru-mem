@@ -5,10 +5,11 @@
 //!
 //! Note that the memory required for each entry is only an estimate and some
 //! auxiliary structure is disregarded. With some data structures (such as the
-//! [HashMap] or [HashSet](std::collections::HashSet))), some internal data is
-//! not accessible, so the required memory is even more undermested. Therefore,
-//! the actual data structure can take more memory than was assigned, however
-//! this should not be an excessive amount in most cases.
+//! [HashMap](std::collections::HashMap) or
+//! [HashSet](std::collections::HashSet))), some internal data is not
+//! accessible, so the required memory is even more undermested. Therefore, the
+//! actual data structure can take more memory than was assigned, however this
+//! should not be an excessive amount in most cases.
 //!
 //! # Motivating example
 //!
@@ -214,8 +215,7 @@ impl<K, V, S> LruCache<K, V, S> {
     }
 
     /// Creates a new, empty LRU cache with the given maximum memory size which
-    /// will use the given hash builder to hash keys. The internal hash map is
-    /// initialized with [HashMap::with_hasher].
+    /// will use the given hash builder to hash keys.
     ///
     /// # Arguments
     ///
@@ -243,8 +243,7 @@ impl<K, V, S> LruCache<K, V, S> {
 
     /// Creates a new, empty LRU cache with the given maximum memory size and
     /// the specified initial capacity which will use the given hash builder to
-    /// hash keys. The internal hash map is initialized with
-    /// [HashMap::with_hasher].
+    /// hash keys.
     ///
     /// # Arguments
     ///
@@ -853,7 +852,7 @@ where
     /// Shrinks the capacity of the cache with a lower bound. The capacity will
     /// remain at least as large as both the [length](LruCache::len) and the
     /// given lower bound while maintaining internal constraints of the hash
-    /// map (see [HashMap::shrink_to]).
+    /// table.
     ///
     /// If the capacity is less than the given lower bound, this method is
     /// no-op.
@@ -885,7 +884,7 @@ where
 
     /// Shrinks the capacity of the cache as much as possible. It will drop
     /// down as much as possible while maintaining internal constraints of the
-    /// hash map (see [HashMap::shrink_to_fit]).
+    /// hash table.
     ///
     /// # Example
     ///
