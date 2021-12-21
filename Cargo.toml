@@ -1,0 +1,27 @@
+[package]
+name = "lru-mem"
+description = "An LRU cache implementation bounded by memory."
+version = "0.1.0"
+authors = [ "florian1345 <florian1345@gmx.de>" ]
+edition = "2021"
+documentation = "https://docs.rs/lru-mem/0.1.0/lru-mem/"
+license = "MIT OR Apache-2.0"
+categories = [ "data-structures" ]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+hashbrown = { version = "0.11", features = [ "raw" ] }
+
+[dev-dependencies]
+criterion = "0.3"
+rand = "0.8"
+rand_xoshiro = "0.6"
+
+[[bench]]
+name = "main"
+harness = false
+
+[profile.bench]
+opt-level = 3
+lto = true
