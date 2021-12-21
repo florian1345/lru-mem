@@ -91,6 +91,10 @@ use std::time::{Duration, Instant};
 ///
 /// impl MemSize for Person {
 ///     fn mem_size(&self) -> usize {
+///         // Both members may have allocated data, which is accounted for by
+///         // calling mem_size. Note that strange alignment inside the Person
+///         // struct may actually increase the memory requirement beyond the
+///         // one computed here, but we assume it to be compact.
 ///         self.name.mem_size() + self.address.mem_size()
 ///     }
 /// }
