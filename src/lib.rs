@@ -1,9 +1,9 @@
 //! This crate implements an LRU (least-recently-used) cache that is limited by
 //! the total size of its entries. As more entries are added than fit in the
 //! specified memory bound, the least-recently-used ones are ejected. The cache
-//! supports O(1) insertion, retrieval, and removal.
+//! supports average-case O(1) insertion, retrieval, and removal.
 //!
-//! Note that the memory required for each entry is only estimated and some
+//! Note that the memory required for each entry is only an estimate and some
 //! auxiliary structure is disregarded. With some data structures (such as the
 //! [HashMap] or [HashSet](std::collections::HashSet))), some internal data is
 //! not accessible, so the required memory is even more undermested. Therefore,

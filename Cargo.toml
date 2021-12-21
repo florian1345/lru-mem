@@ -7,6 +7,7 @@ edition = "2021"
 documentation = "https://docs.rs/lru-mem/0.1.0/lru-mem/"
 license = "MIT OR Apache-2.0"
 categories = [ "data-structures" ]
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
