@@ -1,13 +1,14 @@
 [package]
 name = "lru-mem"
 description = "An LRU cache implementation bounded by memory."
-version = "0.1.0"
+version = "0.1.1"
 authors = [ "florian1345 <florian1345@gmx.de>" ]
 edition = "2021"
 documentation = "https://docs.rs/lru-mem/0.1.0/lru-mem/"
 license = "MIT OR Apache-2.0"
 categories = [ "data-structures" ]
 readme = "README.md"
+repository = "https://github.com/florian1345/lru-mem"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -133,10 +133,7 @@ impl<K: MemSize, V: MemSize> Entry<K, V> {
 /// fits.
 ///
 /// Note that both the key type `K` and the value type `V` must implement the
-/// [MemSize] trait to allow for size estimation in normal usage. It is
-/// recommended that keys be rather small, as they need to be stored twice in
-/// the internal data structures. Furthermore, `K` must implement [Clone] for
-/// insertion.
+/// [MemSize] trait to allow for size estimation in normal usage.
 ///
 /// Mutable access is not allowed directly, since it may change the size of an
 /// entry. It must be done either by removing the element using
@@ -976,8 +973,9 @@ where
     /// Gets a reference to the value associated with the given key. If there
     /// is no value for that key, `None` is returned.
     ///
-    /// This method also marks the value as most-recently-used. If you do not
-    /// want the usage history to be updated, use [LruCache::peek] instead.
+    /// This method also marks the value as most-recently-used (see
+    /// [LruCache::touch]). If you do not want the usage history to be updated,
+    /// use [LruCache::peek] instead.
     ///
     /// The memory requirement of the value may not be changed.
     ///

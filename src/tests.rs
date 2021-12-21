@@ -166,6 +166,20 @@ fn getting_sets_most_recently_used() {
 }
 
 #[test]
+fn peeking_does_not_set_most_recently_used() {
+    let mut cache = LruCache::new(2048);
+
+    cache.insert("a".to_owned(), string_with_size(674)).unwrap();
+    cache.insert("b".to_owned(), string_with_size(674)).unwrap();
+    cache.peek(&"a".to_owned());
+    cache.insert("c".to_owned(), string_with_size(674)).unwrap();
+
+    assert!(cache.get("a").is_none());
+    assert!(cache.get("b").is_some());
+    assert!(cache.get("c").is_some());
+}
+
+#[test]
 fn cache_rejects_too_large_entry() {
     let mut cache = LruCache::new(256);
     let key = "This is a pretty long key, especially considering that keys \
@@ -187,6 +201,15 @@ fn removing_works() {
 
     assert_eq!(Some(("hello", "world")), cache.remove_entry("hello"));
     assert_eq!(None, cache.remove("hello"));
+}
+
+#[test]
+fn contains_works() {
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello", "world").unwrap();
+
+    assert!(cache.contains("hello"));
+    assert!(!cache.contains("greetings"));
 }
 
 #[test]
