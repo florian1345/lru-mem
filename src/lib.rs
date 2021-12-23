@@ -6,10 +6,10 @@
 //! Note that the memory required for each entry is only an estimate and some
 //! auxiliary structure is disregarded. With some data structures (such as the
 //! [HashMap](std::collections::HashMap) or
-//! [HashSet](std::collections::HashSet))), some internal data is not
-//! accessible, so the required memory is even more undermested. Therefore, the
-//! actual data structure can take more memory than was assigned, however this
-//! should not be an excessive amount in most cases.
+//! [HashSet](std::collections::HashSet)), some internal data is not
+//! accessible, so the required memory is even more underestimated. Therefore,
+//! the actual data structure can take more memory than was assigned, however
+//! this should not be an excessive amount in most cases.
 //!
 //! # Motivating example
 //!
@@ -81,6 +81,7 @@ use hashbrown::raw::RawTable;
 
 use std::borrow::Borrow;
 use std::hash::{Hash, BuildHasher};
+use std::hint;
 use std::mem;
 use std::ptr;
 
@@ -561,7 +562,7 @@ where
 
     fn insert_untracked(&mut self, entry: Entry<K, V>) {
         let (entry_ptr, _) = self.insert_into_table(entry)
-            .unwrap_or_else(|_| panic!());
+            .unwrap_or_else(|_| unsafe { hint::unreachable_unchecked() });
         unsafe { self.set_head(entry_ptr) };
     }
 
@@ -1381,3 +1382,24 @@ where
         clone
     }
 }
+
+// Since the LruCache contains raw pointers, it is not automatically marked as
+// Send and Sync. We will provide manual implementations as well as arguments
+// why that is ok.
+
+// It is implicitly assumed that every LruCache only contains pointers to
+// memory that belongs to the cache itself. So, if an LruCache is sent to
+// another thread, that memory can now only be accessed by that thread. In
+// other words, two LruCaches or anything related (e.g. iterators) can never
+// access the same memory. Therefore, sending them is no issue.
+
+unsafe impl<K: Send, V: Send, S: Send> Send for LruCache<K, V, S> { }
+
+// If an immutable reference to an LruCache exists, there is simultaneously no
+// mutable reference to the same cache. By design of the cache, any operations
+// applied to that reference will allow no writing access to any of its memory.
+// Those that yield any possibility of writing, such as cloning, are restricted
+// to newly allocated memory. Therefore, sending references is no issue, and by
+// definition of Sync, LruCache may implement it.
+
+unsafe impl<K: Sync, V: Sync, S: Sync> Sync for LruCache<K, V, S> { }

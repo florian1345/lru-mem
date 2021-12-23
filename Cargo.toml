@@ -18,10 +18,9 @@ hashbrown = { version = "0.11", features = [ "raw" ] }
 [dev-dependencies]
 criterion = "0.3"
 rand = "0.8"
-rand_xoshiro = "0.6"
 
 [[bench]]
-name = "main"
+name = "bench"
 harness = false
 
 [profile.bench]
