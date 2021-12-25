@@ -7,10 +7,13 @@ use rand::Rng;
 use rand::rngs::ThreadRng;
 
 mod alloc;
+mod clone;
+mod drain;
 mod get;
 mod insert;
 mod iter;
 mod peek;
+mod remove;
 
 const VALUE_LEN: usize = 100;
 
@@ -20,34 +23,12 @@ fn value() -> String {
     unsafe { String::from_utf8_unchecked(bytes) }
 }
 
-/// Generates a new LRU cache and also returns its keys as a vector.
-fn prepare_cache(size: usize)
-        -> (LruCache<u64, String>, Vec<u64>) {
-    let mut rng = rand::thread_rng();
-    let mut cache = LruCache::new(size);
-    let mut added = 0;
-
-    while added == cache.len() {
-        let key = rng.gen();
-        let value = value();
-        cache.insert(key, value).unwrap();
-        added += 1;
-    }
-
-    let keys = cache.keys().cloned().collect();
-    (cache, keys)
-}
-
 const KIBI: usize = 1024;
 const MEBI: usize = KIBI * KIBI;
 const GIBI: usize = KIBI * MEBI;
 
-fn bench_cache_function<F>(group: &mut BenchmarkGroup<WallTime>,
-    size: usize, run_benchmark: F)
-where
-    F: Fn(&mut LruCache<u64, String>, &[u64], &mut ThreadRng)
-{
-    let id = if size >= GIBI {
+fn get_id(size: usize) -> String {
+    if size >= GIBI {
         format!("{} GiB", size / GIBI)
     }
     else if size >= MEBI {
@@ -58,19 +39,90 @@ where
     }
     else {
         format!("{} B", size)
-    };
-    let (mut cache, keys) = prepare_cache(size);
+    }
+}
+
+fn fill(cache: &mut LruCache<u64, String>, rng: &mut impl Rng) -> Vec<u64> {
+    let mut added = 0;
+    let old_len = cache.len();
+
+    while old_len + added == cache.len() {
+        let key = rng.gen();
+        let value = value();
+        cache.insert(key, value).unwrap();
+        added += 1;
+    }
+
+    cache.keys().cloned().collect()
+}
+
+/// Generates a new LRU cache and also returns its keys as a vector.
+fn prepare_benchmark(size: usize)
+        -> (String, LruCache<u64, String>, Vec<u64>, ThreadRng) {
+    let id = get_id(size);
     let mut rng = rand::thread_rng();
+    let mut cache = LruCache::new(size);
+    let keys = fill(&mut cache, &mut rng);
+    (id, cache, keys, rng)
+}
+
+fn bench_cache_function<F>(group: &mut BenchmarkGroup<WallTime>,
+    size: usize, run_benchmark: F)
+where
+    F: Fn(&mut LruCache<u64, String>, &[u64], &mut ThreadRng)
+{
+    let (id, mut cache, keys, mut rng) = prepare_benchmark(size);
 
     group.bench_function(id, |b| b.iter(||
         run_benchmark(&mut cache, &keys, &mut rng)));
 }
 
+fn bench_cache_function_with_refill<F>(group: &mut BenchmarkGroup<WallTime>,
+    size: usize, run_benchmark: F)
+where
+    F: Fn(&mut LruCache<u64, String>, &[u64], &mut ThreadRng)
+{
+    let (id, mut cache, mut keys, mut rng) = prepare_benchmark(size);
+
+    // TODO find a solution that does not measure the "fill" function as well.
+
+    group.bench_function(id, |b| b.iter(
+        || {
+            run_benchmark(&mut cache, &keys, &mut rng);
+            keys = fill(&mut cache, &mut rng);
+        }));
+}
+
+const CONSTANT_TIME_SIZES: &'static [usize] = &[
+    4 * 1024,
+    16* 1024,
+    64 * 1024,
+    256 * 1024,
+    1024 * 1024,
+    4 * 1024 * 1024,
+    16 * 1024 * 1024,
+    64 * 1024 * 1024
+];
+
+const LINEAR_TIME_SIZES: &'static [usize] = &[
+    64 * 1024,
+    256 * 1024,
+    1024 * 1024,
+    4 * 1024 * 1024,
+    16 * 1024 * 1024,
+    64 * 1024 * 1024,
+    256 * 1024 * 1024,
+    1024 * 1024 * 1024
+];
+
 criterion::criterion_group!(benches,
     alloc::alloc_benchmark,
+    clone::clone_benchmark,
+    drain::drain_benchmark,
     get::get_benchmark,
     insert::insert_benchmark,
     iter::iter_benchmark,
-    peek::peek_benchmark
+    peek::peek_benchmark,
+    remove::remove_benchmark
 );
 criterion::criterion_main!(benches);

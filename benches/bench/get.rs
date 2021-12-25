@@ -17,16 +17,9 @@ fn run_get_benchmark(cache: &mut LruCache<u64, String>, keys: &[u64],
 pub(crate) fn get_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("get");
     group.sample_size(100).measurement_time(Duration::from_secs(60));
-    crate::bench_cache_function(
-        &mut group, 64 * 1024, run_get_benchmark);
-    crate::bench_cache_function(
-        &mut group, 256 * 1024, run_get_benchmark);
-    crate::bench_cache_function(
-        &mut group, 1024 * 1024, run_get_benchmark);
-    crate::bench_cache_function(
-        &mut group, 4 * 1024 * 1024, run_get_benchmark);
-    crate::bench_cache_function(
-        &mut group, 16 * 1024 * 1024, run_get_benchmark);
-    crate::bench_cache_function(
-        &mut group, 64 * 1024 * 1024, run_get_benchmark);
+
+    for &size in crate::LINEAR_TIME_SIZES {
+        crate::bench_cache_function(
+            &mut group, size, run_get_benchmark);
+    }
 }
