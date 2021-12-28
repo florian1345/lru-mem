@@ -135,7 +135,7 @@ impl<K: MemSize, V: MemSize> Entry<K, V> {
 /// ```
 /// let key_1 = 0u64;
 /// let value_1 = vec![0u8; 10];
-/// let size_1 = lru_mem::entry_size(&key_1, &value_1)
+/// let size_1 = lru_mem::entry_size(&key_1, &value_1);
 ///
 /// let key_2 = 1u64;
 /// let value_2 = vec![0u8; 1000];
