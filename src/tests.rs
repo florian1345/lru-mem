@@ -193,6 +193,28 @@ fn cache_rejects_too_large_entry() {
 }
 
 #[test]
+fn precisely_fitting_entry_does_not_eject_lru() {
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello".to_owned(), "world".to_owned()).unwrap();
+    cache.insert("greetings".to_owned(), "moon".to_owned()).unwrap();
+
+    let key = "ahoy".to_owned();
+    let mut value = "mars".to_owned();
+    value.shrink_to_fit();
+    let required_size = cache.max_size() - cache.current_size();
+    let additional_bytes = required_size - entry_size(&key, &value);
+    let additional_data = vec![b's'; additional_bytes];
+    value.push_str(&String::from_utf8(additional_data).unwrap());
+    value.shrink_to_fit();
+
+    assert_eq!(required_size, entry_size(&key, &value));
+
+    cache.insert(key, value).unwrap();
+
+    assert_eq!(3, cache.len());
+}
+
+#[test]
 fn removing_works() {
     let mut cache = LruCache::new(1024);
     cache.insert("hello", "world").unwrap();
@@ -336,6 +358,14 @@ fn reserving_adds_capacity() {
 
     assert!(cache.try_reserve(additional).is_ok());
     assert!(cache.capacity() >= additional + 2);
+}
+
+#[test]
+fn reserving_fails_on_overflow() {
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello", "world").unwrap();
+
+    assert!(cache.try_reserve(usize::MAX).is_err());
 }
 
 #[test]

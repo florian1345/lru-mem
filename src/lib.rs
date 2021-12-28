@@ -107,10 +107,7 @@ struct Entry<K, V> {
 
 impl<K: MemSize, V: MemSize> Entry<K, V> {
     fn new(key: K, value: V) -> Entry<K, V> {
-        let key_size = key.mem_size();
-        let value_size = value.mem_size();
-        let meta_size = mem::size_of::<Entry<(), ()>>();
-        let size = key_size + value_size + meta_size;
+        let size = entry_size(&key, &value);
 
         Entry {
             size,
@@ -122,7 +119,38 @@ impl<K: MemSize, V: MemSize> Entry<K, V> {
     }
 }
 
-/// A LRU (least-recently-used) cache that stores values associated with keys.
+/// Gets the memory an entry with the given key and value would occupy in an
+/// LRU cache, in bytes. This is also the function used internally, thus if the
+/// returned number of bytes fits inside the cache (as can be determined using
+/// [LruCache::current_size] and [LruCache::max_size]), it is guaranteed not to
+/// eject an element.
+///
+/// # Arguments
+///
+/// * `key`: A reference to the key of the entry whose size to determine.
+/// * `value`: A reference to the value of the entry whose size to determine.
+///
+/// # Example
+///
+/// ```
+/// let key_1 = 0u64;
+/// let value_1 = vec![0u8; 10];
+/// let size_1 = lru_mem::entry_size(&key_1, &value_1)
+///
+/// let key_2 = 1u64;
+/// let value_2 = vec![0u8; 1000];
+/// let size_2 = lru_mem::entry_size(&key_2, &value_2);
+///
+/// assert!(size_1 < size_2);
+/// ```
+pub fn entry_size<K: MemSize, V: MemSize>(key: &K, value: &V) -> usize {
+    let key_size = key.mem_size();
+    let value_size = value.mem_size();
+    let meta_size = mem::size_of::<Entry<(), ()>>();
+    key_size + value_size + meta_size
+}
+
+/// An LRU (least-recently-used) cache that stores values associated with keys.
 /// Insertion, retrieval, and removal all have average-case complexity in O(1).
 /// The cache has an upper memory bound, which is set at construction time.
 /// This is enforced using estimates on the memory requirement of each
@@ -135,7 +163,9 @@ impl<K: MemSize, V: MemSize> Entry<K, V> {
 /// fits.
 ///
 /// Note that both the key type `K` and the value type `V` must implement the
-/// [MemSize] trait to allow for size estimation in normal usage.
+/// [MemSize] trait to allow for size estimation in normal usage. In addition,
+/// the key type `K` is required to implement [Hash] and [Eq] for most
+/// meaningful operations.
 ///
 /// Mutable access is not allowed directly, since it may change the size of an
 /// entry. It must be done either by removing the element using
@@ -779,6 +809,12 @@ where
         }
     }
 
+    fn new_capacity(&self, additional: usize)
+            -> Result<usize, TryReserveError> {
+        self.len().checked_add(additional)
+            .ok_or_else(|| TryReserveError::CapacityOverflow)
+    }
+
     /// Reserves capacity for at least `additional` new entries to be inserted
     /// into the cache. The collection may reserve more space to avoid frequent
     /// reallocations.
@@ -790,9 +826,7 @@ where
     ///
     /// # Panics
     ///
-    /// If the new capacity exceeds [isize::MAX] bytes of the internal entry
-    /// vector. One element of this vector stores one key, one value, and three
-    /// `usize`.
+    /// If the new allocation size overflows [usize].
     ///
     /// # Example
     ///
@@ -805,7 +839,7 @@ where
     /// assert!(cache.capacity() >= 11);
     /// ```
     pub fn reserve(&mut self, additional: usize) {
-        let new_capacity = self.len() + additional;
+        let new_capacity = self.new_capacity(additional).unwrap();
 
         if self.capacity() < new_capacity {
             self.reallocate(new_capacity);
@@ -838,7 +872,7 @@ where
     /// ```
     pub fn try_reserve(&mut self, additional: usize)
             -> Result<(), TryReserveError> {
-        let new_capacity = self.len() + additional;
+        let new_capacity = self.new_capacity(additional)?;
 
         if self.capacity() < new_capacity {
             self.reallocate_with(|this|
@@ -1191,6 +1225,11 @@ where
     /// most-recently-used entry. If there was an entry with the given key
     /// before, it is removed and its value returned. Otherwise, `None` is
     /// returned.
+    ///
+    /// If you want to know before calling this method whether elements would
+    /// be ejected, you can use [entry_size] to obtain the memory usage that
+    /// would be assigned to the created entry and check using
+    /// [LruCache::current_size] and [LruCache::max_size] whether it fits.
     ///
     /// # Arguments
     ///
