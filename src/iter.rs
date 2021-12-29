@@ -14,10 +14,19 @@ pub struct Iter<'a, K, V> {
 
 impl<'a, K, V> Iter<'a, K, V> {
     pub(crate) fn new<S>(cache: &LruCache<K, V, S>) -> Iter<K, V> {
-        Iter {
-            next: cache.tail,
-            next_back: cache.head,
-            lifetime: PhantomData
+        if cache.is_empty() {
+            Iter {
+                next: ptr::null_mut(),
+                next_back: ptr::null_mut(),
+                lifetime: PhantomData
+            }
+        }
+        else {
+            Iter {
+                next: unsafe { (*cache.seal).prev },
+                next_back: unsafe { (*cache.seal).next },
+                lifetime: PhantomData
+            }
         }
     }
 }
@@ -34,34 +43,32 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
 
             if self.next == self.next_back {
                 self.next = ptr::null_mut();
-                self.next_back = ptr::null_mut();
             }
             else {
                 self.next = entry.prev;
             }
 
-            Some((&entry.key, &entry.value))
+            unsafe { Some((entry.key(), entry.value())) }
         }
     }
 }
 
 impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Iter<'a, K, V> {
     fn next_back(&mut self) -> Option<(&'a K, &'a V)> {
-        if self.next_back.is_null() {
+        if self.next.is_null() {
             None
         }
         else {
             let entry = unsafe { &*self.next_back };
 
             if self.next_back == self.next {
-                self.next_back = ptr::null_mut();
                 self.next = ptr::null_mut();
             }
             else {
                 self.next_back = entry.next;
             }
 
-            Some((&entry.key, &entry.value))
+            unsafe { Some((entry.key(), entry.value())) }
         }
     }
 }
@@ -129,57 +136,87 @@ impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Values<'a, K, V> {
 
 impl<'a, K: 'a, V: 'a> FusedIterator for Values<'a, K, V> { }
 
+struct TakingIterator<K, V> {
+    next: *mut Entry<K, V>,
+    next_back: *mut Entry<K, V>,
+}
+
+impl<K, V> TakingIterator<K, V> {
+    fn new<S>(cache: &LruCache<K, V, S>) -> TakingIterator<K, V> {
+        if cache.is_empty() {
+            TakingIterator {
+                next: ptr::null_mut(),
+                next_back: ptr::null_mut()
+            }
+        }
+        else {
+            TakingIterator {
+                next: unsafe { (*cache.seal).prev },
+                next_back: unsafe { (*cache.seal).next }
+            }
+        }
+    }
+}
+
+impl<K, V> Iterator for TakingIterator<K, V> {
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<(K, V)> {
+        if self.next.is_null() {
+            None
+        }
+        else {
+            unsafe {
+                let entry = ptr::read(self.next);
+
+                if self.next == self.next_back {
+                    self.next = ptr::null_mut();
+                }
+                else {
+                    self.next = entry.prev;
+                }
+
+                Some((entry.key.assume_init(), entry.value.assume_init()))
+            }
+        }
+    }
+}
+
+impl<K, V> DoubleEndedIterator for TakingIterator<K, V> {
+    fn next_back(&mut self) -> Option<(K, V)> {
+        if self.next.is_null() {
+            None
+        }
+        else {
+            unsafe {
+                let entry = ptr::read(self.next_back);
+
+                if self.next_back == self.next {
+                    self.next = ptr::null_mut();
+                }
+                else {
+                    self.next_back = entry.next;
+                }
+
+                Some((entry.key.assume_init(), entry.value.assume_init()))
+            }
+        }
+    }
+}
+
 /// An iterator that drains key-value-pairs from an [LruCache] odered from
 /// least- to most-recently-used. This is obtained by calling
 /// [LruCache::drain].
 pub struct Drain<'a, K, V, S> {
+    iterator: TakingIterator<K, V>,
     cache: &'a mut LruCache<K, V, S>
 }
 
 impl<'a, K, V, S> Drain<'a, K, V, S> {
     pub(crate) fn new(cache: &'a mut LruCache<K, V, S>) -> Drain<'a, K, V, S> {
-        Drain { cache }
-    }
-}
-
-fn next<K, V, S>(cache: &mut LruCache<K, V, S>) -> Option<(K, V)> {
-    if cache.tail.is_null() {
-        None
-    }
-    else {
-        unsafe {
-            let entry = ptr::read(cache.tail);
-
-            if cache.tail == cache.head {
-                cache.tail = ptr::null_mut();
-                cache.head = ptr::null_mut();
-            }
-            else {
-                cache.tail = (*cache.tail).prev;
-            }
-
-            Some((entry.key, entry.value))
-        }
-    }
-}
-
-fn next_back<K, V, S>(cache: &mut LruCache<K, V, S>) -> Option<(K, V)> {
-    if cache.head.is_null() {
-        None
-    }
-    else {
-        unsafe {
-            let entry = ptr::read(cache.head);
-
-            if cache.head == cache.tail {
-                cache.head = ptr::null_mut();
-                cache.tail = ptr::null_mut();
-            }
-            else {
-                cache.head = (*cache.head).next;
-            }
-
-            Some((entry.key, entry.value))
+        Drain {
+            iterator: TakingIterator::new(cache),
+            cache
         }
     }
 }
@@ -188,13 +225,13 @@ impl<'a, K, V, S> Iterator for Drain<'a, K, V, S> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<(K, V)> {
-        next(&mut self.cache)
+        self.iterator.next()
     }
 }
 
 impl<'a, K, V, S> DoubleEndedIterator for Drain<'a, K, V, S> {
     fn next_back(&mut self) -> Option<(K, V)> {
-        next_back(&mut self.cache)
+        self.iterator.next_back()
     }
 }
 
@@ -204,8 +241,12 @@ impl<'a, K, V, S> Drop for Drain<'a, K, V, S> {
         while let Some(_) = self.next() { }
 
         // Set the cache as empty.
-        self.cache.head = ptr::null_mut();
-        self.cache.tail = ptr::null_mut();
+
+        unsafe {
+            (*self.cache.seal).next = self.cache.seal;
+            (*self.cache.seal).prev = self.cache.seal;
+        }
+
         self.cache.current_size = 0;
         self.cache.table.clear_no_drop();
     }
@@ -217,12 +258,16 @@ impl<'a, K, V, S> FusedIterator for Drain<'a, K, V, S> { }
 /// entries as key-value-pairs odered from least- to most-recently-used. This
 /// is obtained by calling [IntoIterator::into_iter] on the cache.
 pub struct IntoIter<K, V, S> {
+    iterator: TakingIterator<K, V>,
     cache: LruCache<K, V, S>
 }
 
 impl<K, V, S> IntoIter<K, V, S> {
     pub(crate) fn new(cache: LruCache<K, V, S>) -> IntoIter<K, V, S> {
-        IntoIter { cache }
+        IntoIter {
+            iterator: TakingIterator::new(&cache),
+            cache
+        }
     }
 }
 
@@ -230,13 +275,13 @@ impl<K, V, S> Iterator for IntoIter<K, V, S> {
     type Item = (K, V);
 
     fn next(&mut self) -> Option<(K, V)> {
-        next(&mut self.cache)
+        self.iterator.next()
     }
 }
 
 impl<K, V, S> DoubleEndedIterator for IntoIter<K, V, S> {
     fn next_back(&mut self) -> Option<(K, V)> {
-        next_back(&mut self.cache)
+        self.iterator.next_back()
     }
 }
 

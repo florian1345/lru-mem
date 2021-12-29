@@ -136,8 +136,8 @@ fn cache_ejects_lru_if_overflowing() {
     assert!(cache.get("b").is_some());
     assert!(cache.get("c").is_some());
 
-    assert_eq!("b", unsafe { &(*cache.tail).key });
-    assert_eq!("c", unsafe { &(*cache.head).key });
+    assert_eq!("b", unsafe { (*(*cache.seal).prev).key() });
+    assert_eq!("c", unsafe { (*(*cache.seal).next).key() });
 }
 
 #[test]
@@ -156,13 +156,13 @@ fn getting_sets_most_recently_used() {
     assert!(cache.get("b").is_none());
     assert!(cache.get("c").is_some());
 
-    assert_eq!("a", unsafe { &(*cache.tail).key });
-    assert_eq!("c", unsafe { &(*cache.head).key });
+    assert_eq!("a", unsafe { (*(*cache.seal).prev).key() });
+    assert_eq!("c", unsafe { (*(*cache.seal).next).key() });
 
     cache.get("a");
 
-    assert_eq!("c", unsafe { &(*cache.tail).key });
-    assert_eq!("a", unsafe { &(*cache.head).key });
+    assert_eq!("c", unsafe { (*(*cache.seal).prev).key() });
+    assert_eq!("a", unsafe { (*(*cache.seal).next).key() });
 }
 
 #[test]
@@ -368,14 +368,19 @@ fn reserving_fails_on_overflow() {
     assert!(cache.try_reserve(usize::MAX).is_err());
 }
 
-#[test]
-fn shrinking_does_not_drop_below_len() {
+fn large_test_cache() -> LruCache<&'static str, &'static str> {
     let mut cache = LruCache::new(1024);
     cache.insert("hello", "world").unwrap();
     cache.insert("greetings", "moon").unwrap();
     cache.insert("ahoy", "mars").unwrap();
     cache.insert("hi", "venus").unwrap();
     cache.insert("good morning", "jupiter").unwrap();
+    cache
+}
+
+#[test]
+fn shrinking_does_not_drop_below_len() {
+    let mut cache = large_test_cache();
     cache.shrink_to(4);
 
     assert!(cache.capacity() >= 5);
@@ -408,13 +413,7 @@ fn cache_works_with_many_reallocations() {
 
 #[test]
 fn iter_works() {
-    let mut cache = LruCache::new(1024);
-    cache.insert("hello", "world").unwrap();
-    cache.insert("greetings", "moon").unwrap();
-    cache.insert("ahoy", "mars").unwrap();
-    cache.insert("hi", "venus").unwrap();
-    cache.insert("good morning", "jupiter").unwrap();
-
+    let cache = large_test_cache();
     let mut iter = cache.iter();
 
     assert_eq!(Some((&"hello", &"world")), iter.next());
@@ -428,13 +427,7 @@ fn iter_works() {
 
 #[test]
 fn separated_iters_zip_to_pair_iter() {
-    let mut cache = LruCache::new(1024);
-    cache.insert("hello", "world").unwrap();
-    cache.insert("greetings", "moon").unwrap();
-    cache.insert("ahoy", "mars").unwrap();
-    cache.insert("hi", "venus").unwrap();
-    cache.insert("good morning", "jupiter").unwrap();
-
+    let cache = large_test_cache();
     let pair_iter_collected = cache.iter().collect::<Vec<_>>();
     let zip_iter_collected = cache.keys()
         .zip(cache.values())
@@ -455,24 +448,31 @@ fn drain_clears_cache() {
     assert!(cache.get("hello").is_none());
 }
 
+fn test_owning_iterator<I>(mut iter: I)
+where
+    I: Iterator<Item = (&'static str, &'static str)> + DoubleEndedIterator
+{
+    assert_eq!(Some(("hello", "world")), iter.next());
+    assert_eq!(Some(("good morning", "jupiter")), iter.next_back());
+    assert_eq!(Some(("hi", "venus")), iter.next_back());
+    assert_eq!(Some(("ahoy", "mars")), iter.next_back());
+    assert_eq!(Some(("greetings", "moon")), iter.next());
+    assert_eq!(None, iter.next_back());
+    assert_eq!(None, iter.next());
+}
+
 #[test]
 fn drain_returns_entries() {
-    let mut cache = LruCache::new(1024);
-    cache.insert("hello", "world").unwrap();
-    cache.insert("greetings", "moon").unwrap();
-    cache.insert("ahoy", "mars").unwrap();
-    cache.insert("hi", "venus").unwrap();
-    cache.insert("good morning", "jupiter").unwrap();
+    let mut cache = large_test_cache();
+    let drain = cache.drain();
+    test_owning_iterator(drain);
+}
 
-    let mut drain = cache.drain();
-
-    assert_eq!(Some(("hello", "world")), drain.next());
-    assert_eq!(Some(("good morning", "jupiter")), drain.next_back());
-    assert_eq!(Some(("hi", "venus")), drain.next_back());
-    assert_eq!(Some(("ahoy", "mars")), drain.next_back());
-    assert_eq!(Some(("greetings", "moon")), drain.next());
-    assert_eq!(None, drain.next_back());
-    assert_eq!(None, drain.next());
+#[test]
+fn into_iter_returns_entries() {
+    let cache = large_test_cache();
+    let into_iter = cache.into_iter();
+    test_owning_iterator(into_iter);
 }
 
 #[test]
@@ -510,3 +510,5 @@ fn clone_creates_independent_cache() {
     assert_eq!(cache_drained_expected, cache_drained);
     assert_eq!(clone_drained_expected, clone_drained);
 }
+
+// TODO test empty iterators
