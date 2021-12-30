@@ -80,6 +80,7 @@ use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::raw::RawTable;
 
 use std::borrow::Borrow;
+use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, BuildHasher};
 use std::hint;
 use std::mem::{self, MaybeUninit};
@@ -1465,6 +1466,12 @@ impl<K, V, S> Drop for LruCache<K, V, S> {
         unsafe {
             let _ = Box::from_raw(self.seal);
         }
+    }
+}
+
+impl<K: Debug, V: Debug, S> Debug for LruCache<K, V, S> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
     }
 }
 
