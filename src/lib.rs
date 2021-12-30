@@ -996,10 +996,7 @@ where
     /// assert!(cache.max_size() < 1024);
     /// ```
     pub fn set_max_size(&mut self, max_size: usize) {
-        if self.current_size > max_size {
-            self.eject_to_target(max_size);
-        }
-
+        self.eject_to_target(max_size);
         self.max_size = max_size;
     }
 

@@ -511,4 +511,21 @@ fn clone_creates_independent_cache() {
     assert_eq!(clone_drained_expected, clone_drained);
 }
 
-// TODO test empty iterators
+fn assert_is_empty<T, I>(mut iterator: I)
+where
+    I: Iterator<Item = T> + DoubleEndedIterator
+{
+    assert!(iterator.next().is_none());
+    assert!(iterator.next_back().is_none());
+}
+
+#[test]
+fn empty_cache_builds_empty_iterators() {
+    let mut cache: LruCache<String, String> = LruCache::new(1024);
+
+    assert_is_empty(cache.iter());
+    assert_is_empty(cache.keys());
+    assert_is_empty(cache.values());
+    assert_is_empty(cache.drain());
+    assert_is_empty(cache.into_iter());
+}
