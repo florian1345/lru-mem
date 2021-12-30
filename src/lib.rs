@@ -215,6 +215,9 @@ pub struct LruCache<K, V, S = DefaultHashBuilder> {
     // use one dummy entry to act as both. It has to be ensured that we never
     // iterate over this seal, so the edge case in which the cache is empty has
     // to be considered in every situation where we iterate over the elements.
+
+    // This system is inspired by the lru-crate: https://crates.io/crates/lru
+
     seal: *mut Entry<K, V>,
     current_size: usize,
     max_size: usize,
