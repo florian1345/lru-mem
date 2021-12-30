@@ -1,7 +1,7 @@
 [package]
 name = "lru-mem"
 description = "An LRU cache implementation bounded by memory."
-version = "0.1.4"
+version = "0.1.5"
 authors = [ "florian1345 <florian1345@gmx.de>" ]
 edition = "2021"
 documentation = "https://docs.rs/lru-mem/"
