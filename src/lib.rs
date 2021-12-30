@@ -82,7 +82,7 @@ use hashbrown::raw::RawTable;
 use std::borrow::Borrow;
 use std::hash::{Hash, BuildHasher};
 use std::hint;
-use std::mem;
+use std::mem::{self, MaybeUninit};
 use std::ptr;
 
 mod error;
@@ -96,13 +96,44 @@ pub use error::{LruError, LruResult};
 pub use iter::{Drain, IntoIter, Iter, Keys, Values};
 pub use mem_size::MemSize;
 
-#[derive(Clone)]
 struct Entry<K, V> {
     size: usize,
     prev: *mut Entry<K, V>,
     next: *mut Entry<K, V>,
-    key: K,
-    value: V
+    key: MaybeUninit<K>,
+    value: MaybeUninit<V>
+}
+
+impl<K, V> Entry<K, V> {
+    fn new_seal() -> Entry<K, V> {
+        Entry {
+            size: 0,
+            prev: ptr::null_mut(),
+            next: ptr::null_mut(),
+            key: MaybeUninit::uninit(),
+            value: MaybeUninit::uninit()
+        }
+    }
+
+    unsafe fn key(&self) -> &K {
+        self.key.assume_init_ref()
+    }
+
+    unsafe fn value(&self) -> &V {
+        self.value.assume_init_ref()
+    }
+}
+
+impl<K: Clone, V: Clone> Entry<K, V> {
+    unsafe fn clone(&self) -> Entry<K, V> {
+        Entry {
+            size: self.size,
+            prev: self.prev,
+            next: self.next,
+            key: MaybeUninit::new(self.key().clone()),
+            value: MaybeUninit::new(self.value().clone())
+        }
+    }
 }
 
 impl<K: MemSize, V: MemSize> Entry<K, V> {
@@ -113,8 +144,8 @@ impl<K: MemSize, V: MemSize> Entry<K, V> {
             size,
             prev: ptr::null_mut(),
             next: ptr::null_mut(),
-            key,
-            value
+            key: MaybeUninit::new(key),
+            value: MaybeUninit::new(value)
         }
     }
 }
@@ -173,8 +204,17 @@ pub fn entry_size<K: MemSize, V: MemSize>(key: &K, value: &V) -> usize {
 /// [LruCache::mutate].
 pub struct LruCache<K, V, S = DefaultHashBuilder> {
     table: RawTable<Entry<K, V>>,
-    head: *mut Entry<K, V>,
-    tail: *mut Entry<K, V>,
+
+    // The seal is a dummy entry that is simultaneously in front of the head
+    // and behind the tail of the list. You can imagine it as connecting the
+    // list to a cycle.
+    // Having a dummy entry makes some operations (in particular unhinging)
+    // simpler. The cache would also work with two dummy entries, but only the
+    // next-field of the head and prev-field of the tail would be used. So, we
+    // use one dummy entry to act as both. It has to be ensured that we never
+    // iterate over this seal, so the edge case in which the cache is empty has
+    // to be considered in every situation where we iterate over the elements.
+    seal: *mut Entry<K, V>,
     current_size: usize,
     max_size: usize,
     hash_builder: S
@@ -235,10 +275,16 @@ impl<K, V, S> LruCache<K, V, S> {
 
     fn with_table_and_hasher(max_size: usize, table: RawTable<Entry<K, V>>,
             hash_builder: S) -> LruCache<K, V, S> {
+        let seal = Box::into_raw(Box::new(Entry::new_seal()));
+
+        unsafe {
+            (*seal).next = seal;
+            (*seal).prev = seal;
+        }
+
         LruCache {
             table,
-            head: ptr::null_mut(),
-            tail: ptr::null_mut(),
+            seal,
             current_size: 0,
             max_size,
             hash_builder
@@ -501,7 +547,7 @@ where
     K: Hash,
     S: BuildHasher
 {
-    move |val| make_hash::<K, K, S>(hash_builder, &val.key)
+    move |val| make_hash::<K, K, S>(hash_builder, unsafe { val.key() })
 }
 
 fn equivalent_key<Q, K, V>(k: &Q) -> impl Fn(&Entry<K, V>) -> bool + '_
@@ -509,7 +555,7 @@ where
     K: Borrow<Q>,
     Q: ?Sized + Eq,
 {
-    move |x| k.eq(x.key.borrow())
+    move |x| k.eq(unsafe { x.key() }.borrow())
 }
 
 impl<K, V, S> LruCache<K, V, S>
@@ -517,28 +563,6 @@ where
     K: Eq + Hash,
     S: BuildHasher
 {
-    #[inline]
-    unsafe fn unhinge(&mut self, entry: *mut Entry<K, V>) {
-        let prev = (*entry).prev;
-        let next = (*entry).next;
-
-        if !prev.is_null() {
-            (*prev).next = next;
-        }
-
-        if !next.is_null() {
-            (*next).prev = prev;
-        }
-
-        if self.head == entry {
-            self.head = next;
-        }
-
-        if self.tail == entry {
-            self.tail = prev;
-        }
-    }
-
     fn remove_from_table<Q>(&mut self, key: &Q) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
@@ -566,32 +590,70 @@ where
         self.table.get_mut(hash, equivalent_key(key))
     }
 
-    /// If insertion works, returns a pointer to the entry inside the table
-    /// and, if the key already had an associated entry, that old entry.
+    #[inline]
+    fn insert_into_table_with_hash(&mut self, hash: u64, entry: Entry<K, V>)
+            -> Result<*mut Entry<K, V>, Entry<K, V>> {
+        match self.table.try_insert_no_grow(hash, entry) {
+            Ok(bucket) => Ok(bucket.as_ptr()),
+            Err(entry) => Err(entry)
+        }
+    }
+
+    /// Assumes that there is no entry with the same key in the table. If
+    /// insertion works, returns a pointer to the entry inside the table.
     /// Otherwise, returns the entry input into this function.
     fn insert_into_table(&mut self, entry: Entry<K, V>)
-            -> Result<(*mut Entry<K, V>, Option<Entry<K, V>>), Entry<K, V>> {
-        let hash = make_insert_hash::<K, S>(&self.hash_builder, &entry.key);
-        let table_entry = self.table.get_mut(hash, equivalent_key(&entry.key));
+            -> Result<*mut Entry<K, V>, Entry<K, V>> {
+        let key = unsafe { entry.key.assume_init_ref() };
+        let hash = make_insert_hash::<K, S>(&self.hash_builder, key);
 
-        if let Some(table_entry) = table_entry {
-            let ptr = table_entry as *mut Entry<K, V>;
-            let old = Some(mem::replace(table_entry, entry));
-            Ok((ptr, old))
+        self.insert_into_table_with_hash(hash, entry)
+    }
+
+    #[inline]
+    unsafe fn unhinge(&mut self, entry: &Entry<K, V>) {
+        let prev = entry.prev;
+        let next = entry.next;
+
+        (*prev).next = next;
+        (*next).prev = prev;
+    }
+
+    unsafe fn set_head(&mut self, entry: *mut Entry<K, V>) {
+        let next = (*self.seal).next;
+        (*entry).next = next;
+        (*entry).prev = self.seal;
+        (*next).prev = entry;
+        (*self.seal).next = entry;
+    }
+
+    unsafe fn touch_ptr(&mut self, entry: *mut Entry<K, V>) {
+        self.unhinge(&*entry);
+        self.set_head(entry);
+    }
+
+    fn remove_metadata(&mut self, entry: Entry<K, V>) -> (K, V) {
+        unsafe {
+            self.unhinge(&entry);
+            self.current_size -= entry.size;
+            (entry.key.assume_init(), entry.value.assume_init())
         }
-        else {
-            match self.table.try_insert_no_grow(hash, entry) {
-                Ok(bucket) => {
-                    let ptr = unsafe { bucket.as_mut() as *mut Entry<K, V> };
-                    Ok((ptr, None))
-                },
-                Err(entry) => Err(entry)
-            }
+    }
+
+    #[inline]
+    unsafe fn remove_ptr(&mut self, entry: *mut Entry<K, V>) -> (K, V) {
+        let entry = self.remove_from_table((*entry).key()).unwrap();
+        self.remove_metadata(entry)
+    }
+
+    fn eject_to_target(&mut self, target: usize) {
+        while self.current_size > target {
+            self.remove_lru();
         }
     }
 
     fn insert_untracked(&mut self, entry: Entry<K, V>) {
-        let (entry_ptr, _) = self.insert_into_table(entry)
+        let entry_ptr = self.insert_into_table(entry)
             .unwrap_or_else(|_| unsafe { hint::unreachable_unchecked() });
         unsafe { self.set_head(entry_ptr) };
     }
@@ -601,17 +663,20 @@ where
         F: FnOnce(&mut Self) -> R
     {
         let mut entries = Vec::with_capacity(self.len());
-        let mut tail = self.tail;
+        let mut tail = unsafe { (*self.seal).prev };
 
-        while !tail.is_null() {
+        while tail != self.seal {
             entries.push(unsafe { ptr::read(tail) });
             tail = unsafe { (*tail).prev };
         }
 
         self.table.clear_no_drop();
         let result = reserve(self);
-        self.head = ptr::null_mut();
-        self.tail = ptr::null_mut();
+
+        unsafe {
+            (*self.seal).next = self.seal;
+            (*self.seal).prev = self.seal;
+        }
 
         for entry in entries {
             self.insert_untracked(entry);
@@ -625,29 +690,25 @@ where
             this.table.reserve(new_capacity, make_hasher(&this.hash_builder)))
     }
 
-    #[inline]
-    unsafe fn remove_ptr(&mut self, entry: *mut Entry<K, V>) -> (K, V) {
-        self.unhinge(entry);
-        let entry = self.remove_from_table(&(*entry).key).unwrap();
-        self.current_size -= entry.size;
-        (entry.key, entry.value)
-    }
+    fn lru_ptr(&self) -> Option<*mut Entry<K, V>> {
+        let lru = unsafe { (*self.seal).prev };
 
-    unsafe fn remove_checked_ptr(&mut self, entry: *mut Entry<K, V>) -> Option<(K, V)> {
-        if entry.is_null() {
+        if lru == self.seal {
             None
         }
         else {
-            Some(self.remove_ptr(entry))
+            Some(lru)
         }
     }
 
-    unsafe fn peek_checked_ptr(&self, entry: *mut Entry<K, V>) -> Option<(&K, &V)> {
-        if entry.is_null() {
+    fn mru_ptr(&self) -> Option<*mut Entry<K, V>> {
+        let mru = unsafe { (*self.seal).next };
+
+        if mru == self.seal {
             None
         }
         else {
-            Some((&(*entry).key, &(*entry).value))
+            Some(mru)
         }
     }
 
@@ -669,7 +730,7 @@ where
     /// assert_eq!(1, cache.len());
     /// ```
     pub fn remove_lru(&mut self) -> Option<(K, V)> {
-        unsafe { self.remove_checked_ptr(self.tail) }
+        self.lru_ptr().map(|ptr| unsafe { self.remove_ptr(ptr) })
     }
 
     /// Gets a reference to the least-recently-used entry from this cache. This
@@ -696,16 +757,12 @@ where
     ///     cache.get_lru());
     /// ```
     pub fn get_lru(&mut self) -> Option<(&K, &V)> {
-        if self.tail.is_null() {
-            None
-        }
-        else {
+        self.lru_ptr().map(|entry| {
             unsafe {
-                let old_tail = self.tail;
-                self.touch_ptr(self.tail);
-                Some((&(*old_tail).key, &(*old_tail).value))
+                self.touch_ptr(entry);
+                ((*entry).key(), (*entry).value())
             }
-        }
+        })
     }
 
     /// Gets a reference to the least-recently-used entry from this cache. This
@@ -732,7 +789,8 @@ where
     ///     cache.peek_lru());
     /// ```
     pub fn peek_lru(&self) -> Option<(&K, &V)> {
-        unsafe { self.peek_checked_ptr(self.tail) }
+        self.lru_ptr().map(|ptr|
+            unsafe { ((*ptr).key(), (*ptr).value()) })
     }
 
     /// Removes the most-recently-used value from the cache. This returns both
@@ -753,7 +811,7 @@ where
     /// assert_eq!(1, cache.len());
     /// ```
     pub fn remove_mru(&mut self) -> Option<(K, V)> {
-        unsafe { self.remove_checked_ptr(self.head) }
+        self.mru_ptr().map(|ptr| unsafe { self.remove_ptr(ptr) })
     }
 
     /// Gets a reference to the most-recently-used entry from this cache. This
@@ -779,34 +837,8 @@ where
     ///     cache.peek_mru());
     /// ```
     pub fn peek_mru(&self) -> Option<(&K, &V)> {
-        unsafe { self.peek_checked_ptr(self.head) }
-    }
-
-    /// Returns the old head index. To be assigned to `next` of the new head
-    /// entry.
-    unsafe fn set_head(&mut self, entry: *mut Entry<K, V>) {
-        if !self.head.is_null() {
-            (*self.head).prev = entry;
-        }
-
-        (*entry).next = self.head;
-        self.head = entry;
-
-        if self.tail.is_null() {
-            self.tail = entry;
-        }
-    }
-
-    unsafe fn touch_ptr(&mut self, entry: *mut Entry<K, V>) {
-        self.unhinge(entry);
-        self.set_head(entry);
-        (*entry).prev = ptr::null_mut();
-    }
-
-    fn eject_to_target(&mut self, target: usize) {
-        while self.current_size > target {
-            self.remove_lru();
-        }
+        self.mru_ptr().map(|ptr|
+            unsafe { ((*ptr).key(), (*ptr).value()) })
     }
 
     fn new_capacity(&self, additional: usize)
@@ -964,10 +996,7 @@ where
     /// assert!(cache.max_size() < 1024);
     /// ```
     pub fn set_max_size(&mut self, max_size: usize) {
-        if self.current_size > max_size {
-            self.eject_to_target(max_size);
-        }
-
+        self.eject_to_target(max_size);
         self.max_size = max_size;
     }
 
@@ -1038,7 +1067,7 @@ where
         if let Some(entry) = self.get_mut_from_table(key) {
             let entry_ptr = entry as *mut Entry<K, V>;
             unsafe { self.touch_ptr(entry_ptr); }
-            Some(unsafe { &(*entry_ptr).value })
+            Some(unsafe { (*entry_ptr).value() })
         }
         else {
             None
@@ -1075,7 +1104,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        self.get_from_table(key).map(|e| &e.value)
+        self.get_from_table(key).map(|e| unsafe { e.value() })
     }
 
     /// Indicates whether this cache contains an entry associated with the
@@ -1128,13 +1157,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        if let Some(entry) = self.get_mut_from_table(key) {
-            let entry_ptr = entry as *mut Entry<K, V>;
-            Some(unsafe { self.remove_ptr(entry_ptr) })
-        }
-        else {
-            None
-        }
+        self.remove_from_table(key).map(|entry| self.remove_metadata(entry))
     }
 
     /// Removes and returns the value associated with the given key from this
@@ -1182,8 +1205,6 @@ where
     /// ```
     pub fn clear(&mut self) {
         self.table.clear();
-        self.head = ptr::null_mut();
-        self.tail = ptr::null_mut();
         self.current_size = 0;
     }
 
@@ -1258,9 +1279,12 @@ where
         let mut entry = Entry::new(key, value);
 
         if entry.size > self.max_size {
+            let key = unsafe { entry.key.assume_init() };
+            let value = unsafe { entry.value.assume_init() };
+
             return Err(LruError::EntryTooLarge {
-                key: entry.key,
-                value: entry.value,
+                key,
+                value,
                 entry_size: entry.size,
                 max_size: self.max_size
             });
@@ -1268,9 +1292,10 @@ where
 
         // Deduplicate keys, make space
 
-        let result = self.get_mut_from_table(&entry.key)
-            .map(|e| e as *mut Entry<K, V>)
-            .map(|e| unsafe { self.remove_ptr(e).1 });
+        let key = unsafe { entry.key() };
+        let hash = make_insert_hash::<K, S>(&self.hash_builder, key);
+        let result = self.table.remove_entry(hash, equivalent_key(key))
+            .map(|e| self.remove_metadata(e).1);
         self.eject_to_target(self.max_size - entry.size);
 
         // Insert entry at head of list
@@ -1278,8 +1303,8 @@ where
         let size = entry.size;
 
         loop {
-            match self.insert_into_table(entry) {
-                Ok((entry_ptr, _)) => {
+            match self.insert_into_table_with_hash(hash, entry) {
+                Ok(entry_ptr) => {
                     self.current_size += size;
                     unsafe { self.set_head(entry_ptr) };
                     return Ok(result);
@@ -1335,14 +1360,20 @@ where
     where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
-        F: Fn(&mut V) -> R
+        F: FnOnce(&mut V) -> R
     {
         let max_size = self.max_size;
 
         if let Some(entry) = self.get_mut_from_table(key) {
-            let old_value_size = entry.value.mem_size();
-            let result = op(&mut entry.value);
-            let new_value_size = entry.value.mem_size();
+            let new_value_size;
+            let result;
+            let old_value_size;
+
+            unsafe {
+                old_value_size = entry.value().mem_size();
+                result = op(entry.value.assume_init_mut());
+                new_value_size = entry.value().mem_size();
+            }
 
             if new_value_size > old_value_size {
                 // The operation was expanding; we must ensure it still fits.
@@ -1410,15 +1441,30 @@ where
         let mut clone = LruCache::with_capacity_and_hasher(
             max_size, capacity, hash_builder);
         clone.current_size = self.current_size;
-        let mut next = self.tail;
+        let mut next = unsafe { (*self.seal).prev };
 
-        while !next.is_null() {
+        while next != self.seal {
             let entry = unsafe { (&*next).clone() };
             next = entry.prev;
             clone.insert_untracked(entry);
         }
 
         clone
+    }
+}
+
+impl<K, V, S> Drop for LruCache<K, V, S> {
+    fn drop(&mut self) {
+        for mut entry in self.table.drain() {
+            unsafe {
+                ptr::drop_in_place(entry.key.as_mut_ptr());
+                ptr::drop_in_place(entry.value.as_mut_ptr());
+            }
+        }
+
+        unsafe {
+            let _ = Box::from_raw(self.seal);
+        }
     }
 }
 
