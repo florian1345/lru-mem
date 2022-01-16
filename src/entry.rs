@@ -6,7 +6,8 @@ use std::ptr;
 /// Gets the memory an entry with the given key and value would occupy in an
 /// LRU cache, in bytes. This is also the function used internally, thus if the
 /// returned number of bytes fits inside the cache (as can be determined using
-/// [LruCache::current_size] and [LruCache::max_size]), it is guaranteed not to
+/// [LruCache::current_size](crate::LruCache::current_size) and
+/// [LruCache::max_size](crate::LruCache::max_size)), it is guaranteed not to
 /// eject an element.
 ///
 /// # Arguments

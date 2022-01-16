@@ -485,7 +485,8 @@ impl<K, V, S> LruCache<K, V, S> {
     ///
     /// Note it is important for the drain to be dropped in order to ensure
     /// integrity of the data structure. Preventing it from being dropped, e.g.
-    /// using [mem::forget], can result in unexpected behavior of the cache.
+    /// using [mem::forget](std::mem::forget), can result in unexpected
+    /// behavior of the cache.
     ///
     /// # Example
     ///

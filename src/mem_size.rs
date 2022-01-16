@@ -171,7 +171,7 @@ pub trait MemSize : HeapSize {
     /// a [Box] or the elements and reserved memory of a [Vec]).
     ///
     /// For [Sized] types, this is always implemented as adding [mem::size_of]
-    /// of `Self` to [MemSize::heap_size]. Non-[Sized] types must provide a
+    /// of `Self` to [HeapSize::heap_size]. Non-[Sized] types must provide a
     /// custom implementation.
     ///
     /// # Example
