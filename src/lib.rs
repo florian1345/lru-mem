@@ -83,9 +83,8 @@ use std::borrow::Borrow;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, BuildHasher};
 use std::hint;
-use std::mem::{self, MaybeUninit};
-use std::ptr;
 
+mod entry;
 mod error;
 mod iter;
 mod mem_size;
@@ -93,94 +92,11 @@ mod mem_size;
 #[cfg(test)]
 mod tests;
 
-pub use error::{LruError, LruResult};
-pub use iter::{Drain, IntoIter, Iter, Keys, Values};
-pub use mem_size::MemSize;
-
-struct Entry<K, V> {
-    size: usize,
-    prev: *mut Entry<K, V>,
-    next: *mut Entry<K, V>,
-    key: MaybeUninit<K>,
-    value: MaybeUninit<V>
-}
-
-impl<K, V> Entry<K, V> {
-    fn new_seal() -> Entry<K, V> {
-        Entry {
-            size: 0,
-            prev: ptr::null_mut(),
-            next: ptr::null_mut(),
-            key: MaybeUninit::uninit(),
-            value: MaybeUninit::uninit()
-        }
-    }
-
-    unsafe fn key(&self) -> &K {
-        self.key.assume_init_ref()
-    }
-
-    unsafe fn value(&self) -> &V {
-        self.value.assume_init_ref()
-    }
-}
-
-impl<K: Clone, V: Clone> Entry<K, V> {
-    unsafe fn clone(&self) -> Entry<K, V> {
-        Entry {
-            size: self.size,
-            prev: self.prev,
-            next: self.next,
-            key: MaybeUninit::new(self.key().clone()),
-            value: MaybeUninit::new(self.value().clone())
-        }
-    }
-}
-
-impl<K: MemSize, V: MemSize> Entry<K, V> {
-    fn new(key: K, value: V) -> Entry<K, V> {
-        let size = entry_size(&key, &value);
-
-        Entry {
-            size,
-            prev: ptr::null_mut(),
-            next: ptr::null_mut(),
-            key: MaybeUninit::new(key),
-            value: MaybeUninit::new(value)
-        }
-    }
-}
-
-/// Gets the memory an entry with the given key and value would occupy in an
-/// LRU cache, in bytes. This is also the function used internally, thus if the
-/// returned number of bytes fits inside the cache (as can be determined using
-/// [LruCache::current_size] and [LruCache::max_size]), it is guaranteed not to
-/// eject an element.
-///
-/// # Arguments
-///
-/// * `key`: A reference to the key of the entry whose size to determine.
-/// * `value`: A reference to the value of the entry whose size to determine.
-///
-/// # Example
-///
-/// ```
-/// let key_1 = 0u64;
-/// let value_1 = vec![0u8; 10];
-/// let size_1 = lru_mem::entry_size(&key_1, &value_1);
-///
-/// let key_2 = 1u64;
-/// let value_2 = vec![0u8; 1000];
-/// let size_2 = lru_mem::entry_size(&key_2, &value_2);
-///
-/// assert!(size_1 < size_2);
-/// ```
-pub fn entry_size<K: MemSize, V: MemSize>(key: &K, value: &V) -> usize {
-    let key_size = key.mem_size();
-    let value_size = value.mem_size();
-    let meta_size = mem::size_of::<Entry<(), ()>>();
-    key_size + value_size + meta_size
-}
+use entry::{Entry, EntryPtr, UnhingedEntry};
+pub use entry::entry_size;
+pub use error::{InsertError, MutateError, TryInsertError};
+pub use iter::{Drain, IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
+pub use mem_size::{HeapSize, MemSize};
 
 /// An LRU (least-recently-used) cache that stores values associated with keys.
 /// Insertion, retrieval, and removal all have average-case complexity in O(1).
@@ -198,6 +114,9 @@ pub fn entry_size<K: MemSize, V: MemSize>(key: &K, value: &V) -> usize {
 /// [MemSize] trait to allow for size estimation in normal usage. In addition,
 /// the key type `K` is required to implement [Hash] and [Eq] for most
 /// meaningful operations.
+///
+/// Furthermore, the hasher type `S` must implement the [BuildHasher] trait for
+/// non-trivial functionality.
 ///
 /// Mutable access is not allowed directly, since it may change the size of an
 /// entry. It must be done either by removing the element using
@@ -218,7 +137,7 @@ pub struct LruCache<K, V, S = DefaultHashBuilder> {
 
     // This system is inspired by the lru-crate: https://crates.io/crates/lru
 
-    seal: *mut Entry<K, V>,
+    seal: EntryPtr<K, V>,
     current_size: usize,
     max_size: usize,
     hash_builder: S
@@ -279,12 +198,7 @@ impl<K, V, S> LruCache<K, V, S> {
 
     fn with_table_and_hasher(max_size: usize, table: RawTable<Entry<K, V>>,
             hash_builder: S) -> LruCache<K, V, S> {
-        let seal = Box::into_raw(Box::new(Entry::new_seal()));
-
-        unsafe {
-            (*seal).next = seal;
-            (*seal).prev = seal;
-        }
+        let seal = EntryPtr::new_seal();
 
         LruCache {
             table,
@@ -343,7 +257,7 @@ impl<K, V, S> LruCache<K, V, S> {
     /// use hashbrown::hash_map::DefaultHashBuilder;
     /// use lru_mem::LruCache;
     ///
-    /// // Create an LRU with 8 KiB memory limit that can hold at least 8
+    /// // Create an LRU with 4 KiB memory limit that can hold at least 8
     /// // elements without reallocating that uses s for hashing keys.
     /// let s = DefaultHashBuilder::default();
     /// let cache: LruCache<String, String> =
@@ -441,10 +355,50 @@ impl<K, V, S> LruCache<K, V, S> {
         self.table.capacity()
     }
 
+    /// Returns a reference to the cache's [BuildHasher].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use hashbrown::hash_map::DefaultHashBuilder;
+    /// use lru_mem::LruCache;
+    ///
+    /// let hasher = DefaultHashBuilder::default();
+    /// let cache: LruCache<String, String> =
+    ///     LruCache::with_hasher(4096, hasher);
+    /// let hasher: &DefaultHashBuilder = cache.hasher();
+    /// ```
+    pub fn hasher(&self) -> &S {
+        &self.hash_builder
+    }
+
+    /// Removes all elements from this cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::LruCache;
+    ///
+    /// let mut cache = LruCache::new(1024);
+    /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
+    /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
+    /// cache.clear();
+    ///
+    /// assert_eq!(None, cache.get("lemon"));
+    /// assert_eq!(0, cache.len());
+    /// assert_eq!(0, cache.current_size());
+    /// ```
+    pub fn clear(&mut self) {
+        self.table.clear();
+        self.current_size = 0;
+    }
+
     /// Creates an iterator over the entries (keys and values) contained in
     /// this cache, ordered from least- to most-recently-used. The values are
     /// not touched, i.e. the usage history is not altered in any way. That is,
     /// the semantics are as in [LruCache::peek].
+    ///
+    /// The memory requirement for any key or value may not be changed.
     ///
     /// # Example
     ///
@@ -475,6 +429,8 @@ impl<K, V, S> LruCache<K, V, S> {
     /// usage history is not altered in any way. That is, the semantics are as
     /// in [LruCache::peek].
     ///
+    /// The memory requirement for any key may not be changed.
+    ///
     /// # Example
     ///
     /// ```
@@ -501,6 +457,8 @@ impl<K, V, S> LruCache<K, V, S> {
     /// usage history is not altered in any way. That is, the semantics are as
     /// in [LruCache::peek].
     ///
+    /// The memory requirement for any value may not be changed.
+    ///
     /// # Example
     ///
     /// ```
@@ -520,6 +478,78 @@ impl<K, V, S> LruCache<K, V, S> {
     /// ```
     pub fn values(&self) -> Values<'_, K, V> {
         Values::new(self)
+    }
+
+    /// Creates an iterator that drains entries from this cache. Both key and
+    /// value of each entry are returned. The cache is cleared afterward.
+    ///
+    /// Note it is important for the drain to be dropped in order to ensure
+    /// integrity of the data structure. Preventing it from being dropped, e.g.
+    /// using [mem::forget](std::mem::forget), can result in unexpected
+    /// behavior of the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::LruCache;
+    ///
+    /// let mut cache = LruCache::new(1024);
+    /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
+    /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
+    /// cache.insert("grapefruit".to_owned(), "bitter".to_owned()).unwrap();
+    /// let mut vec = cache.drain().collect::<Vec<_>>();
+    ///
+    /// assert_eq!(&("apple".to_owned(), "sweet".to_owned()), &vec[0]);
+    /// assert_eq!(&("lemon".to_owned(), "sour".to_owned()), &vec[1]);
+    /// assert_eq!(&("grapefruit".to_owned(), "bitter".to_owned()), &vec[2]);
+    /// assert!(cache.is_empty());
+    /// ```
+    pub fn drain(&mut self) -> Drain<'_, K, V, S> {
+        Drain::new(self)
+    }
+
+    /// Creates an iterator that takes ownership of the cache and iterates over
+    /// its keys, ordered from least- to most-recently-used.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::LruCache;
+    ///
+    /// let mut cache = LruCache::new(1024);
+    /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
+    /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
+    /// cache.insert("grapefruit".to_owned(), "bitter".to_owned()).unwrap();
+    /// let mut keys = cache.into_keys().collect::<Vec<_>>();
+    ///
+    /// assert_eq!(&"apple".to_owned(), &keys[0]);
+    /// assert_eq!(&"lemon".to_owned(), &keys[1]);
+    /// assert_eq!(&"grapefruit".to_owned(), &keys[2]);
+    /// ```
+    pub fn into_keys(self) -> IntoKeys<K, V, S> {
+        IntoKeys::new(self)
+    }
+
+    /// Creates an iterator that takes ownership of the cache and iterates over
+    /// its values, ordered from least- to most-recently-used.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::LruCache;
+    ///
+    /// let mut cache = LruCache::new(1024);
+    /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
+    /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
+    /// cache.insert("grapefruit".to_owned(), "bitter".to_owned()).unwrap();
+    /// let mut values = cache.into_values().collect::<Vec<_>>();
+    ///
+    /// assert_eq!(&"sweet".to_owned(), &values[0]);
+    /// assert_eq!(&"sour".to_owned(), &values[1]);
+    /// assert_eq!(&"bitter".to_owned(), &values[2]);
+    /// ```
+    pub fn into_values(self) -> IntoValues<K, V, S> {
+        IntoValues::new(self)
     }
 }
 
@@ -596,9 +626,9 @@ where
 
     #[inline]
     fn insert_into_table_with_hash(&mut self, hash: u64, entry: Entry<K, V>)
-            -> Result<*mut Entry<K, V>, Entry<K, V>> {
+            -> Result<EntryPtr<K, V>, Entry<K, V>> {
         match self.table.try_insert_no_grow(hash, entry) {
-            Ok(bucket) => Ok(bucket.as_ptr()),
+            Ok(bucket) => Ok(EntryPtr::new(bucket.as_ptr())),
             Err(entry) => Err(entry)
         }
     }
@@ -607,46 +637,36 @@ where
     /// insertion works, returns a pointer to the entry inside the table.
     /// Otherwise, returns the entry input into this function.
     fn insert_into_table(&mut self, entry: Entry<K, V>)
-            -> Result<*mut Entry<K, V>, Entry<K, V>> {
-        let key = unsafe { entry.key.assume_init_ref() };
+            -> Result<EntryPtr<K, V>, Entry<K, V>> {
+        let key = unsafe { entry.key() };
         let hash = make_insert_hash::<K, S>(&self.hash_builder, key);
 
         self.insert_into_table_with_hash(hash, entry)
     }
 
-    #[inline]
-    unsafe fn unhinge(&mut self, entry: &Entry<K, V>) {
-        let prev = entry.prev;
-        let next = entry.next;
-
-        (*prev).next = next;
-        (*next).prev = prev;
+    fn set_head(&mut self, mut entry: EntryPtr<K, V>) {
+        entry.insert(self.seal, self.seal.get().next);
     }
 
-    unsafe fn set_head(&mut self, entry: *mut Entry<K, V>) {
-        let next = (*self.seal).next;
-        (*entry).next = next;
-        (*entry).prev = self.seal;
-        (*next).prev = entry;
-        (*self.seal).next = entry;
-    }
-
-    unsafe fn touch_ptr(&mut self, entry: *mut Entry<K, V>) {
-        self.unhinge(&*entry);
+    fn touch_ptr(&mut self, entry: EntryPtr<K, V>) {
+        unsafe { entry.unhinge(); }
         self.set_head(entry);
     }
 
-    fn remove_metadata(&mut self, entry: Entry<K, V>) -> (K, V) {
-        unsafe {
-            self.unhinge(&entry);
-            self.current_size -= entry.size;
-            (entry.key.assume_init(), entry.value.assume_init())
-        }
+    /// Safety: Requires the key and value of the entry to be initialized.
+    unsafe fn remove_metadata(&mut self, entry: Entry<K, V>) -> (K, V) {
+        let entry = entry.unhinge();
+        self.current_size -= entry.size();
+
+        entry.into_key_value()
     }
 
+    /// Safety: Requires the key of the entry pointed to by the pointer to be
+    /// initialized, and the key and value of the entry located at that key in
+    /// the hash table to be initialized.
     #[inline]
-    unsafe fn remove_ptr(&mut self, entry: *mut Entry<K, V>) -> (K, V) {
-        let entry = self.remove_from_table((*entry).key()).unwrap();
+    unsafe fn remove_ptr(&mut self, entry: EntryPtr<K, V>) -> (K, V) {
+        let entry = self.remove_from_table(entry.get().key()).unwrap();
         self.remove_metadata(entry)
     }
 
@@ -659,7 +679,7 @@ where
     fn insert_untracked(&mut self, entry: Entry<K, V>) {
         let entry_ptr = self.insert_into_table(entry)
             .unwrap_or_else(|_| unsafe { hint::unreachable_unchecked() });
-        unsafe { self.set_head(entry_ptr) };
+        self.set_head(entry_ptr);
     }
 
     fn reallocate_with<F, R>(&mut self, reserve: F) -> R
@@ -667,20 +687,19 @@ where
         F: FnOnce(&mut Self) -> R
     {
         let mut entries = Vec::with_capacity(self.len());
-        let mut tail = unsafe { (*self.seal).prev };
+        let mut tail = self.seal.get().prev;
 
         while tail != self.seal {
-            entries.push(unsafe { ptr::read(tail) });
-            tail = unsafe { (*tail).prev };
+            let entry = unsafe { tail.read() };
+            tail = entry.prev;
+            entries.push(entry);
         }
 
         self.table.clear_no_drop();
         let result = reserve(self);
 
-        unsafe {
-            (*self.seal).next = self.seal;
-            (*self.seal).prev = self.seal;
-        }
+        self.seal.get_mut().next = self.seal;
+        self.seal.get_mut().prev = self.seal;
 
         for entry in entries {
             self.insert_untracked(entry);
@@ -694,8 +713,8 @@ where
             this.table.reserve(new_capacity, make_hasher(&this.hash_builder)))
     }
 
-    fn lru_ptr(&self) -> Option<*mut Entry<K, V>> {
-        let lru = unsafe { (*self.seal).prev };
+    fn lru_ptr(&self) -> Option<EntryPtr<K, V>> {
+        let lru = self.seal.get().prev;
 
         if lru == self.seal {
             None
@@ -705,8 +724,8 @@ where
         }
     }
 
-    fn mru_ptr(&self) -> Option<*mut Entry<K, V>> {
-        let mru = unsafe { (*self.seal).next };
+    fn mru_ptr(&self) -> Option<EntryPtr<K, V>> {
+        let mru = self.seal.get().next;
 
         if mru == self.seal {
             None
@@ -744,7 +763,7 @@ where
     /// This method also marks the value as most-recently-used. If you want the
     /// usage history to not be updated, use [LruCache::peek_lru] instead.
     ///
-    /// The memory requirement of the value may not be changed.
+    /// The memory requirement of the key and value may not be changed.
     ///
     /// # Example
     ///
@@ -764,7 +783,8 @@ where
         self.lru_ptr().map(|entry| {
             unsafe {
                 self.touch_ptr(entry);
-                ((*entry).key(), (*entry).value())
+                let entry = entry.get_extended();
+                (entry.key(), entry.value())
             }
         })
     }
@@ -776,7 +796,7 @@ where
     /// This method does not mark the value as most-recently-used. If you want
     /// the usage history to be updated, use [LruCache::get_lru] instead.
     ///
-    /// The memory requirement of the value may not be changed.
+    /// The memory requirement of the key and value may not be changed.
     ///
     /// # Example
     ///
@@ -794,7 +814,10 @@ where
     /// ```
     pub fn peek_lru(&self) -> Option<(&K, &V)> {
         self.lru_ptr().map(|ptr|
-            unsafe { ((*ptr).key(), (*ptr).value()) })
+            unsafe {
+                let entry = ptr.get_extended();
+                (entry.key(), entry.value())
+            })
     }
 
     /// Removes the most-recently-used value from the cache. This returns both
@@ -826,7 +849,7 @@ where
     /// the usage history is updated, since it was most-recently-used before.
     /// So, there is no need for a `get_mru` method.
     ///
-    /// The memory requirement of the value may not be changed.
+    /// The memory requirement of the key and value may not be changed.
     ///
     /// # Example
     ///
@@ -842,7 +865,10 @@ where
     /// ```
     pub fn peek_mru(&self) -> Option<(&K, &V)> {
         self.mru_ptr().map(|ptr|
-            unsafe { ((*ptr).key(), (*ptr).value()) })
+            unsafe {
+                let entry = ptr.get_extended();
+                (entry.key(), entry.value())
+            })
     }
 
     fn new_capacity(&self, additional: usize)
@@ -1032,8 +1058,51 @@ where
         Q: Eq + Hash + ?Sized
     {
         if let Some(entry) = self.get_mut_from_table(key) {
-            let entry_ptr = entry as *mut Entry<K, V>;
-            unsafe { self.touch_ptr(entry_ptr); }
+            let entry_ptr = EntryPtr::new(entry as *mut Entry<K, V>);
+            self.touch_ptr(entry_ptr);
+        }
+    }
+
+    /// Gets references to the key and value of the entry associated with the
+    /// given key. If there is no entry for that key, `None` is returned.
+    ///
+    /// This method also marks the entry as most-recently-used (see
+    /// [LruCache::touch]). If you do not want the usage history to be updated,
+    /// use [LruCache::peek_entry] instead.
+    ///
+    /// The memory requirement of the key and value may not be changed.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: The key of the entry to get.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::LruCache;
+    ///
+    /// let mut cache = LruCache::new(1024);
+    /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
+    /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
+    ///
+    /// assert_eq!(Some((&"apple".to_owned(), &"sweet".to_owned())),
+    ///     cache.get_entry("apple"));
+    /// assert_eq!(Some(("lemon".to_owned(), "sour".to_owned())),
+    ///     cache.remove_lru());
+    /// ```
+    pub fn get_entry<Q>(&mut self, key: &Q) -> Option<(&K, &V)>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized
+    {
+        if let Some(entry) = self.get_mut_from_table(key) {
+            let entry_ptr = EntryPtr::new(entry as *mut Entry<K, V>);
+            self.touch_ptr(entry_ptr);
+            let entry = unsafe { entry_ptr.get_extended() };
+            Some(unsafe { (entry.key(), entry.value()) })
+        }
+        else {
+            None
         }
     }
 
@@ -1068,14 +1137,41 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        if let Some(entry) = self.get_mut_from_table(key) {
-            let entry_ptr = entry as *mut Entry<K, V>;
-            unsafe { self.touch_ptr(entry_ptr); }
-            Some(unsafe { (*entry_ptr).value() })
-        }
-        else {
-            None
-        }
+        self.get_entry(key).map(|(_, v)| v)
+    }
+
+    /// Gets references to the key and value of the entry associated with the
+    /// given key. If there is no entry for that key, `None` is returned.
+    ///
+    /// This method does not mark the value as most-recently-used. If you want
+    /// the usage history to be updated, use [LruCache::get_entry] instead.
+    ///
+    /// The memory requirement of the key and value may not be changed.
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: The key of the entry to peek.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::LruCache;
+    ///
+    /// let mut cache = LruCache::new(1024);
+    /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
+    /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
+    ///
+    /// assert_eq!(Some((&"apple".to_owned(), &"sweet".to_owned())),
+    ///     cache.peek_entry("apple"));
+    /// assert_eq!(Some(("apple".to_owned(), "sweet".to_owned())),
+    ///     cache.remove_lru());
+    /// ```
+    pub fn peek_entry<Q>(&self, key: &Q) -> Option<(&K, &V)>
+    where
+        K: Borrow<Q>,
+        Q: Eq + Hash + ?Sized
+    {
+        self.get_from_table(key).map(|e| unsafe { (e.key(), e.value()) })
     }
 
     /// Gets a reference to the value associated with the given key. If there
@@ -1161,7 +1257,8 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        self.remove_from_table(key).map(|entry| self.remove_metadata(entry))
+        self.remove_from_table(key)
+            .map(|entry| unsafe { self.remove_metadata(entry) })
     }
 
     /// Removes and returns the value associated with the given key from this
@@ -1191,7 +1288,19 @@ where
         self.remove_entry(key).map(|(_, v)| v)
     }
 
-    /// Removes all elements from this cache.
+    /// Retains only the elements which satisfy the predicate. In other words,
+    /// removes all entries `(k, v)` such that `pred(&k, &v)` returns `false`.
+    /// The elements are visited ordered from least-recently-used to
+    /// most-recently-used.
+    ///
+    /// For all retained entries, i.e. those where `pred` returns `true`, the
+    /// memory requirement of the key and value may not be changed.
+    ///
+    /// # Arguments
+    ///
+    /// * `pred`: A function which takes as input references to the key and
+    /// value of an entry and decides whether it should remain in the map
+    /// (`true`) or not (`false`).
     ///
     /// # Example
     ///
@@ -1201,42 +1310,61 @@ where
     /// let mut cache = LruCache::new(1024);
     /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
     /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
-    /// cache.clear();
+    /// cache.insert("banana".to_owned(), "sweet".to_owned()).unwrap();
+    /// cache.retain(|_, v| v.as_str() == "sweet");
     ///
-    /// assert_eq!(None, cache.get("lemon"));
-    /// assert_eq!(0, cache.len());
-    /// assert_eq!(0, cache.current_size());
+    /// assert_eq!(2, cache.len());
+    /// assert!(cache.get("apple").is_some());
+    /// assert!(cache.get("lemon").is_none());
+    /// assert!(cache.get("banana").is_some());
     /// ```
-    pub fn clear(&mut self) {
-        self.table.clear();
-        self.current_size = 0;
-    }
+    pub fn retain<F>(&mut self, mut pred: F)
+    where
+        F: FnMut(&K, &V) -> bool
+    {
+        let mut tail = self.seal.get().prev;
 
-    /// Creates an iterator that drains entries from this cache. Both key and
-    /// value of each entry are returned. The cache is cleared afterward.
-    ///
-    /// Note it is important for the drain to be dropped in order to ensure
-    /// integrity of the data structure. Preventing it from being dropped, e.g.
-    /// using [mem::forget], can result in unexpected behavior of the cache.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use lru_mem::LruCache;
-    ///
-    /// let mut cache = LruCache::new(1024);
-    /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
-    /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
-    /// cache.insert("grapefruit".to_owned(), "bitter".to_owned()).unwrap();
-    /// let mut vec = cache.drain().collect::<Vec<_>>();
-    ///
-    /// assert_eq!(&("apple".to_owned(), "sweet".to_owned()), &vec[0]);
-    /// assert_eq!(&("lemon".to_owned(), "sour".to_owned()), &vec[1]);
-    /// assert_eq!(&("grapefruit".to_owned(), "bitter".to_owned()), &vec[2]);
-    /// assert!(cache.is_empty());
-    /// ```
-    pub fn drain(&mut self) -> Drain<'_, K, V, S> {
-        Drain::new(self)
+        while tail != self.seal {
+            unsafe {
+                let entry = tail.get();
+                let key = entry.key();
+
+                if !pred(key, entry.value()) {
+                    self.remove_entry(key);
+                }
+
+                tail = entry.prev;
+            }
+        }
+    }
+}
+
+struct EntryTooLarge<K, V> {
+    key: K,
+    value: V,
+    entry_size: usize,
+    max_size: usize
+}
+
+impl<K, V> From<EntryTooLarge<K, V>> for InsertError<K, V> {
+    fn from(data: EntryTooLarge<K, V>) -> InsertError<K, V> {
+        InsertError::EntryTooLarge {
+            key: data.key,
+            value: data.value,
+            entry_size: data.entry_size,
+            max_size: data.max_size
+        }
+    }
+}
+
+impl<K, V> From<EntryTooLarge<K, V>> for TryInsertError<K, V> {
+    fn from(data: EntryTooLarge<K, V>) -> TryInsertError<K, V> {
+        TryInsertError::EntryTooLarge {
+            key: data.key,
+            value: data.value,
+            entry_size: data.entry_size,
+            max_size: data.max_size
+        }
     }
 }
 
@@ -1246,10 +1374,56 @@ where
     V: MemSize,
     S: BuildHasher
 {
+    fn prepare_insert(&mut self, key: K, value: V)
+            -> Result<UnhingedEntry<K, V>, EntryTooLarge<K, V>> {
+        let entry = UnhingedEntry::new(key, value);
+        let entry_size = entry.size();
+
+        if entry_size > self.max_size {
+            let (key, value) = entry.into_key_value();
+
+            Err(EntryTooLarge {
+                key,
+                value,
+                entry_size,
+                max_size: self.max_size
+            })
+        }
+        else {
+            Ok(entry)
+        }
+    }
+
+    fn insert_unchecked(&mut self, entry: UnhingedEntry<K, V>, hash: u64) {
+        let size = entry.size();
+        let mut entry = Entry::new(entry, self.seal, self.seal.get().next);
+
+        loop {
+            match self.insert_into_table_with_hash(hash, entry) {
+                Ok(entry_ptr) => {
+                    self.current_size += size;
+                    self.set_head(entry_ptr);
+                    return;
+                },
+                Err(returned_entry) => {
+                    entry = returned_entry;
+                    self.reallocate(self.table.capacity() * 2 + 1);
+                    
+                    // The seal pointer stays constant through reallocation, so
+                    // only entry.next has to be set.
+
+                    entry.next = self.seal.get().next;
+                }
+            }
+        }
+    }
+
     /// Inserts a new entry into this cache. This is initially the
     /// most-recently-used entry. If there was an entry with the given key
     /// before, it is removed and its value returned. Otherwise, `None` is
-    /// returned.
+    /// returned. If inserting this entry would violate the memory limit,
+    /// the least-recently-used values are ejected from the cache until it
+    /// fits.
     ///
     /// If you want to know before calling this method whether elements would
     /// be ejected, you can use [entry_size] to obtain the memory usage that
@@ -1263,8 +1437,8 @@ where
     ///
     /// # Errors
     ///
-    /// Raises an [LruError::EntryTooLarge] if the entry alone would already be
-    /// too large to fit inside the cache's size limit. That is, even if all
+    /// Raises an [InsertError::EntryTooLarge] if the entry alone would already
+    /// be too large to fit inside the cache's size limit. That is, even if all
     /// other entries were ejected, it still would not be able to be inserted.
     /// If this occurs, the entry was not inserted.
     ///
@@ -1279,46 +1453,93 @@ where
     ///
     /// assert_eq!(2, cache.len());
     /// ```
-    pub fn insert(&mut self, key: K, value: V) -> LruResult<Option<V>, K, V> {
-        let mut entry = Entry::new(key, value);
-
-        if entry.size > self.max_size {
-            let key = unsafe { entry.key.assume_init() };
-            let value = unsafe { entry.value.assume_init() };
-
-            return Err(LruError::EntryTooLarge {
-                key,
-                value,
-                entry_size: entry.size,
-                max_size: self.max_size
-            });
-        }
+    pub fn insert(&mut self, key: K, value: V)
+            -> Result<Option<V>, InsertError<K, V>> {
+        let entry = self.prepare_insert(key, value)?;
 
         // Deduplicate keys, make space
 
-        let key = unsafe { entry.key() };
+        let key = entry.key();
         let hash = make_insert_hash::<K, S>(&self.hash_builder, key);
         let result = self.table.remove_entry(hash, equivalent_key(key))
-            .map(|e| self.remove_metadata(e).1);
-        self.eject_to_target(self.max_size - entry.size);
+            .map(|e| unsafe { self.remove_metadata(e).1 });
+        self.eject_to_target(self.max_size - entry.size());
 
         // Insert entry at head of list
 
-        let size = entry.size;
+        self.insert_unchecked(entry, hash);
+        Ok(result)
+    }
 
-        loop {
-            match self.insert_into_table_with_hash(hash, entry) {
-                Ok(entry_ptr) => {
-                    self.current_size += size;
-                    unsafe { self.set_head(entry_ptr) };
-                    return Ok(result);
-                },
-                Err(returned_entry) => {
-                    entry = returned_entry;
-                    self.reallocate(self.table.capacity() * 2 + 1);
-                }
-            }
+    /// Tries to insert a new entry into this cache. This is initially the
+    /// most-recently-used entry. If there was an entry with the given key
+    /// before or it does not fit within the memory requirement, an appropriate
+    /// error is raised (see below).
+    ///
+    /// # Arguments
+    ///
+    /// * `key`: The key by which the inserted entry will be identified.
+    /// * `value`: The value to store in the inserted entry.
+    ///
+    /// # Errors
+    ///
+    /// * Raises an [TryInsertError::EntryTooLarge] if the entry alone would
+    /// already be too large to fit inside the cache's size limit.
+    /// * Otherwise, raises a [TryInsertError::WouldEjectLru] if the entry does
+    /// not fit within the remaining free memory of the cache, i.e. the
+    /// difference between [LruCache::max_size] and [LruCache::current_size].
+    /// * Otherwise, raises an [TryInsertError::OccupiedEntry] if there was
+    /// already an entry with the given key.
+    ///
+    /// If any error was raised, the entry was not inserted into the cache.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::LruCache;
+    ///
+    /// let mut cache = LruCache::new(1024);
+    /// let result = cache.try_insert("apple".to_owned(), "sweet".to_owned());
+    /// assert!(result.is_ok());
+    /// let result = cache.try_insert("apple".to_owned(), "sour".to_owned());
+    /// assert!(!result.is_ok());
+    /// ```
+    pub fn try_insert(&mut self, key: K, value: V)
+            -> Result<(), TryInsertError<K, V>> {
+        let entry = self.prepare_insert(key, value)?;
+
+        // Check that the entry fits
+
+        let free_memory = self.max_size - self.current_size;
+        let entry_size = entry.size();
+
+        if entry_size > free_memory {
+            let (key, value) = entry.into_key_value();
+
+            return Err(TryInsertError::WouldEjectLru {
+                key,
+                value,
+                entry_size,
+                free_memory
+            })
         }
+
+        // Check that the entry is not occupied
+
+        let key = entry.key();
+        let hash = make_insert_hash::<K, S>(&self.hash_builder, &key);
+
+        if self.table.find(hash, equivalent_key(key)).is_some() {
+            let (key, value) = entry.into_key_value();
+
+            return Err(TryInsertError::OccupiedEntry {
+                key,
+                value
+            })
+        }
+
+        self.insert_unchecked(entry, hash);
+        Ok(())
     }
 
     /// Applies a mutating function to the value associated with the given key.
@@ -1341,10 +1562,10 @@ where
     ///
     /// # Errors
     ///
-    /// Raises an [LruError::EntryTooLarge] if the operation expanded the value
-    /// so much that the entry no longer fit inside the memory limit of the
-    /// cache. If that is the case, the entry is removed and its parts returned
-    /// in the error data.
+    /// Raises an [MutateError::EntryTooLarge] if the operation expanded the
+    /// value so much that the entry no longer fit inside the memory limit of
+    /// the cache. If that is the case, the entry is removed and its parts
+    /// returned in the error data.
     ///
     /// # Example
     ///
@@ -1360,7 +1581,7 @@ where
     /// assert_eq!(Some(&"sweet and sour".to_owned()), cache.peek("apple"));
     /// ```
     pub fn mutate<Q, R, F>(&mut self, key: &Q, op: F)
-        -> LruResult<Option<R>, K, V>
+        -> Result<Option<R>, MutateError<K, V>>
     where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized,
@@ -1375,7 +1596,7 @@ where
 
             unsafe {
                 old_value_size = entry.value().mem_size();
-                result = op(entry.value.assume_init_mut());
+                result = op(entry.value_mut());
                 new_value_size = entry.value().mem_size();
             }
 
@@ -1389,20 +1610,22 @@ where
                     // The entry is too large after the operation; eject it and
                     // raise according error.
 
+                    let old_entry_size = entry.size;
                     let (key, value) = self.remove_entry(key).unwrap();
 
-                    return Err(LruError::EntryTooLarge {
+                    return Err(MutateError::EntryTooLarge {
                         key,
                         value,
-                        entry_size: new_entry_size,
+                        old_entry_size,
+                        new_entry_size,
                         max_size
                     });
                 }
 
                 entry.size = new_entry_size;
-                let entry_ptr = entry as *mut Entry<K, V>;
+                let entry_ptr = EntryPtr::new(entry as *mut Entry<K, V>);
                 self.current_size += diff;
-                unsafe { self.touch_ptr(entry_ptr); }
+                self.touch_ptr(entry_ptr);
                 self.eject_to_target(max_size);
             }
             else {
@@ -1410,9 +1633,9 @@ where
 
                 let diff = old_value_size - new_value_size;
                 entry.size -= diff;
-                let entry_ptr = entry as *mut Entry<K, V>;
+                let entry_ptr = EntryPtr::new(entry as *mut Entry<K, V>);
                 self.current_size -= diff;
-                unsafe { self.touch_ptr(entry_ptr); }
+                self.touch_ptr(entry_ptr);
             }
 
             Ok(Some(result))
@@ -1445,10 +1668,10 @@ where
         let mut clone = LruCache::with_capacity_and_hasher(
             max_size, capacity, hash_builder);
         clone.current_size = self.current_size;
-        let mut next = unsafe { (*self.seal).prev };
+        let mut next = self.seal.get().prev;
 
         while next != self.seal {
-            let entry = unsafe { (&*next).clone() };
+            let entry = unsafe { next.get().clone() };
             next = entry.prev;
             clone.insert_untracked(entry);
         }
@@ -1459,15 +1682,12 @@ where
 
 impl<K, V, S> Drop for LruCache<K, V, S> {
     fn drop(&mut self) {
-        for mut entry in self.table.drain() {
-            unsafe {
-                ptr::drop_in_place(entry.key.as_mut_ptr());
-                ptr::drop_in_place(entry.value.as_mut_ptr());
-            }
+        for entry in self.table.drain() {
+            unsafe { entry.drop() };
         }
 
         unsafe {
-            let _ = Box::from_raw(self.seal);
+            self.seal.drop_seal();
         }
     }
 }
