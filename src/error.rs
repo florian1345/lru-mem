@@ -37,7 +37,7 @@ impl<K, V> Display for InsertError<K, V> {
 impl<K: Debug, V: Debug> Error for InsertError<K, V> { }
 
 /// An enumeration of the different errors that can occur when calling
-/// [LruCache](crate::LruCache::mutate).
+/// [LruCache::mutate](crate::LruCache::mutate).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MutateError<K, V> {
 
@@ -75,7 +75,7 @@ impl<K, V> Display for MutateError<K, V> {
 impl<K: Debug, V: Debug> Error for MutateError<K, V> { }
 
 /// An enumeration of the different errors that can occur when calling
-/// [LruCache](crate::LruCache::try_insert).
+/// [LruCache::try_insert](crate::LruCache::try_insert).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TryInsertError<K, V> {
 
