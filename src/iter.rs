@@ -1,14 +1,14 @@
-use crate::{Entry, LruCache};
+use crate::LruCache;
+use crate::entry::EntryPtr;
 
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
-use std::ptr;
 
 /// An iterator over references to the entries of an [LruCache] ordered from
 /// least- to most-recently-used. This is obtained by calling [LruCache::iter].
 pub struct Iter<'a, K, V> {
-    next: *mut Entry<K, V>,
-    next_back: *mut Entry<K, V>,
+    next: EntryPtr<K, V>,
+    next_back: EntryPtr<K, V>,
     lifetime: PhantomData<&'a ()>
 }
 
@@ -16,15 +16,15 @@ impl<'a, K, V> Iter<'a, K, V> {
     pub(crate) fn new<S>(cache: &LruCache<K, V, S>) -> Iter<K, V> {
         if cache.is_empty() {
             Iter {
-                next: ptr::null_mut(),
-                next_back: ptr::null_mut(),
+                next: unsafe { EntryPtr::null() },
+                next_back: unsafe { EntryPtr::null() },
                 lifetime: PhantomData
             }
         }
         else {
             Iter {
-                next: unsafe { (*cache.seal).prev },
-                next_back: unsafe { (*cache.seal).next },
+                next: cache.seal.get().prev,
+                next_back: cache.seal.get().next,
                 lifetime: PhantomData
             }
         }
@@ -39,10 +39,10 @@ impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
             None
         }
         else {
-            let entry = unsafe { &*self.next };
+            let entry = unsafe { self.next.get_extended() };
 
             if self.next == self.next_back {
-                self.next = ptr::null_mut();
+                self.next = unsafe { EntryPtr::null() };
             }
             else {
                 self.next = entry.prev;
@@ -59,10 +59,10 @@ impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Iter<'a, K, V> {
             None
         }
         else {
-            let entry = unsafe { &*self.next_back };
+            let entry = unsafe { self.next_back.get_extended() };
 
             if self.next_back == self.next {
-                self.next = ptr::null_mut();
+                self.next = unsafe { EntryPtr::null() };
             }
             else {
                 self.next_back = entry.next;
@@ -137,22 +137,22 @@ impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Values<'a, K, V> {
 impl<'a, K: 'a, V: 'a> FusedIterator for Values<'a, K, V> { }
 
 struct TakingIterator<K, V> {
-    next: *mut Entry<K, V>,
-    next_back: *mut Entry<K, V>,
+    next: EntryPtr<K, V>,
+    next_back: EntryPtr<K, V>,
 }
 
 impl<K, V> TakingIterator<K, V> {
     fn new<S>(cache: &LruCache<K, V, S>) -> TakingIterator<K, V> {
         if cache.is_empty() {
             TakingIterator {
-                next: ptr::null_mut(),
-                next_back: ptr::null_mut()
+                next: unsafe { EntryPtr::null() },
+                next_back: unsafe { EntryPtr::null() }
             }
         }
         else {
             TakingIterator {
-                next: unsafe { (*cache.seal).prev },
-                next_back: unsafe { (*cache.seal).next }
+                next: cache.seal.get().prev,
+                next_back: cache.seal.get().next
             }
         }
     }
@@ -167,16 +167,16 @@ impl<K, V> Iterator for TakingIterator<K, V> {
         }
         else {
             unsafe {
-                let entry = ptr::read(self.next);
+                let entry = self.next.read();
 
                 if self.next == self.next_back {
-                    self.next = ptr::null_mut();
+                    self.next = EntryPtr::null();
                 }
                 else {
                     self.next = entry.prev;
                 }
 
-                Some((entry.key.assume_init(), entry.value.assume_init()))
+                Some(entry.into_key_value())
             }
         }
     }
@@ -189,22 +189,22 @@ impl<K, V> DoubleEndedIterator for TakingIterator<K, V> {
         }
         else {
             unsafe {
-                let entry = ptr::read(self.next_back);
+                let entry = self.next_back.read();
 
                 if self.next_back == self.next {
-                    self.next = ptr::null_mut();
+                    self.next = EntryPtr::null();
                 }
                 else {
                     self.next_back = entry.next;
                 }
 
-                Some((entry.key.assume_init(), entry.value.assume_init()))
+                Some(entry.into_key_value())
             }
         }
     }
 }
 
-/// An iterator that drains key-value-pairs from an [LruCache] odered from
+/// An iterator that drains key-value-pairs from an [LruCache] ordered from
 /// least- to most-recently-used. This is obtained by calling
 /// [LruCache::drain].
 pub struct Drain<'a, K, V, S> {
@@ -238,14 +238,13 @@ impl<'a, K, V, S> DoubleEndedIterator for Drain<'a, K, V, S> {
 impl<'a, K, V, S> Drop for Drain<'a, K, V, S> {
     fn drop(&mut self) {
         // Drop all allocated memory of the remaining elements.
+
         while let Some(_) = self.next() { }
 
         // Set the cache as empty.
 
-        unsafe {
-            (*self.cache.seal).next = self.cache.seal;
-            (*self.cache.seal).prev = self.cache.seal;
-        }
+        self.cache.seal.get_mut().next = self.cache.seal;
+        self.cache.seal.get_mut().prev = self.cache.seal;
 
         self.cache.current_size = 0;
         self.cache.table.clear_no_drop();
@@ -255,7 +254,7 @@ impl<'a, K, V, S> Drop for Drain<'a, K, V, S> {
 impl<'a, K, V, S> FusedIterator for Drain<'a, K, V, S> { }
 
 /// An iterator that takes ownership of an [LruCache] and iterates over its
-/// entries as key-value-pairs odered from least- to most-recently-used. This
+/// entries as key-value-pairs ordered from least- to most-recently-used. This
 /// is obtained by calling [IntoIterator::into_iter] on the cache.
 pub struct IntoIter<K, V, S> {
     iterator: TakingIterator<K, V>,
@@ -292,5 +291,63 @@ impl<K, V, S> Drop for IntoIter<K, V, S> {
 
         // Clear items from the cache without dropping their memory.
         self.cache.table.clear_no_drop();
+    }
+}
+
+/// An iterator that takes ownership of an [LruCache] and iterates over its
+/// keys ordered from least- to most-recently-used. This is obtained by calling
+/// [LruCache::into_keys].
+pub struct IntoKeys<K, V, S> {
+    into_iter: IntoIter<K, V, S>
+}
+
+impl<K, V, S> IntoKeys<K, V, S> {
+    pub(crate) fn new(cache: LruCache<K, V, S>) -> IntoKeys<K, V, S> {
+        IntoKeys {
+            into_iter: IntoIter::new(cache)
+        }
+    }
+}
+
+impl<K, V, S> Iterator for IntoKeys<K, V, S>  {
+    type Item = K;
+
+    fn next(&mut self) -> Option<K> {
+        self.into_iter.next().map(|(k, _)| k)
+    }
+}
+
+impl<K, V, S> DoubleEndedIterator for IntoKeys<K, V, S> {
+    fn next_back(&mut self) -> Option<K> {
+        self.into_iter.next_back().map(|(k, _)| k)
+    }
+}
+
+/// An iterator that takes ownership of an [LruCache] and iterates over its
+/// values ordered from least- to most-recently-used. This is obtained by
+/// calling [LruCache::into_values].
+pub struct IntoValues<K, V, S> {
+    into_iter: IntoIter<K, V, S>
+}
+
+impl<K, V, S> IntoValues<K, V, S> {
+    pub(crate) fn new(cache: LruCache<K, V, S>) -> IntoValues<K, V, S> {
+        IntoValues {
+            into_iter: IntoIter::new(cache)
+        }
+    }
+}
+
+impl<K, V, S> Iterator for IntoValues<K, V, S>  {
+    type Item = V;
+
+    fn next(&mut self) -> Option<V> {
+        self.into_iter.next().map(|(_, v)| v)
+    }
+}
+
+impl<K, V, S> DoubleEndedIterator for IntoValues<K, V, S> {
+    fn next_back(&mut self) -> Option<V> {
+        self.into_iter.next_back().map(|(_, v)| v)
     }
 }

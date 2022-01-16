@@ -1,9 +1,13 @@
 use super::*;
 
+use std::mem;
+
 #[test]
 fn tuples_have_correct_size() {
-    assert_eq!(12, (1u16, 2u32, 3i16, 'x').mem_size());
-    assert_eq!(5, ((1u8, 2i8, 3u8), 4i16).mem_size());
+    assert_eq!(mem::size_of::<(u16, u32, i16, char)>(),
+        (1u16, 2u32, 3i16, 'x').mem_size());
+    assert_eq!(mem::size_of::<((u8, i8, u8), i16)>(),
+        ((1u8, 2i8, 3u8), 4i16).mem_size());
 }
 
 #[test]
@@ -40,7 +44,7 @@ fn options_have_correct_size() {
 
 #[test]
 fn entry_correctly_computes_size() {
-    let entry = Entry::new("hello".to_owned(), "world!".to_owned());
+    let entry = UnhingedEntry::new("hello".to_owned(), "world!".to_owned());
 
     let key_str_bytes = 5;
     let value_str_bytes = 6;
@@ -58,7 +62,7 @@ fn entry_correctly_computes_size() {
         + usize_bytes
         + 2 * ptr_bytes;
 
-    assert_eq!(expected_bytes, entry.size);
+    assert_eq!(expected_bytes, entry.size());
 }
 
 #[test]
@@ -136,8 +140,8 @@ fn cache_ejects_lru_if_overflowing() {
     assert!(cache.get("b").is_some());
     assert!(cache.get("c").is_some());
 
-    assert_eq!("b", unsafe { (*(*cache.seal).prev).key() });
-    assert_eq!("c", unsafe { (*(*cache.seal).next).key() });
+    assert_eq!("b", unsafe { cache.seal.get().prev.get().key() });
+    assert_eq!("c", unsafe { cache.seal.get().next.get().key() });
 }
 
 #[test]
@@ -156,13 +160,13 @@ fn getting_sets_most_recently_used() {
     assert!(cache.get("b").is_none());
     assert!(cache.get("c").is_some());
 
-    assert_eq!("a", unsafe { (*(*cache.seal).prev).key() });
-    assert_eq!("c", unsafe { (*(*cache.seal).next).key() });
+    assert_eq!("a", unsafe { cache.seal.get().prev.get().key() });
+    assert_eq!("c", unsafe { cache.seal.get().next.get().key() });
 
     cache.get("a");
 
-    assert_eq!("c", unsafe { (*(*cache.seal).prev).key() });
-    assert_eq!("a", unsafe { (*(*cache.seal).next).key() });
+    assert_eq!("c", unsafe { cache.seal.get().prev.get().key() });
+    assert_eq!("a", unsafe { cache.seal.get().next.get().key() });
 }
 
 #[test]
@@ -189,7 +193,7 @@ fn cache_rejects_too_large_entry() {
         entry over the capacity of the cache.".to_owned();
 
     assert!(matches!(cache.insert(key, value),
-        Err(LruError::EntryTooLarge { .. })));
+        Err(InsertError::EntryTooLarge { .. })));
 }
 
 #[test]
@@ -215,6 +219,53 @@ fn precisely_fitting_entry_does_not_eject_lru() {
 }
 
 #[test]
+fn try_insert_works_as_insert_if_ok() {
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello".to_owned(), "world".to_owned()).unwrap();
+    cache.try_insert("greetings".to_owned(), "moon".to_owned()).unwrap();
+
+    assert_eq!(2, cache.len());
+    assert_eq!("world".to_owned(), cache.remove_lru().unwrap().1);
+    assert_eq!("moon".to_owned(), cache.remove_lru().unwrap().1);
+}
+
+#[test]
+fn try_insert_fails_on_duplication() {
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello".to_owned(), "world".to_owned()).unwrap();
+    let result = cache.try_insert("hello".to_owned(), "moon".to_owned());
+
+    assert!(matches!(result, Err(TryInsertError::OccupiedEntry { .. })));
+    assert_eq!(1, cache.len());
+    assert_eq!(&"world".to_owned(), cache.get("hello").unwrap());
+}
+
+#[test]
+fn try_insert_fails_if_eject_required() {
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello".to_owned(), "world".to_owned()).unwrap();
+    cache.insert("greetings".to_owned(), "moon".to_owned()).unwrap();
+    cache.set_max_size(cache.current_size());
+    let result = cache.try_insert("ahoy".to_owned(), "mars".to_owned());
+
+    assert!(matches!(result, Err(TryInsertError::WouldEjectLru { .. })));
+    assert_eq!(2, cache.len());
+    assert!(!cache.contains("ahoy"));
+}
+
+#[test]
+fn try_insert_fails_if_too_large() {
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello".to_owned(), "world".to_owned()).unwrap();
+    let value = String::from_utf8(vec![b'0'; 1024]).unwrap();
+    let result = cache.try_insert("key".to_owned(), value);
+
+    assert!(matches!(result, Err(TryInsertError::EntryTooLarge { .. })));
+    assert_eq!(1, cache.len());
+    assert!(!cache.contains("key"));
+}
+
+#[test]
 fn removing_works() {
     let mut cache = LruCache::new(1024);
     cache.insert("hello", "world").unwrap();
@@ -223,6 +274,56 @@ fn removing_works() {
 
     assert_eq!(Some(("hello", "world")), cache.remove_entry("hello"));
     assert_eq!(None, cache.remove("hello"));
+}
+
+#[test]
+fn retain_does_not_affect_empty_cache() {
+    let mut cache: LruCache<u64, Vec<u8>> = LruCache::new(1024);
+    cache.retain(|k, v| v.len() as u64 == *k);
+
+    assert_eq!(0, cache.len());
+}
+
+#[test]
+fn retain_works_if_all_match() {
+    let mut cache: LruCache<u64, Vec<u8>> = LruCache::new(1024);
+    cache.insert(1, vec![0]).unwrap();
+    cache.insert(5, vec![2, 3, 5, 7, 11]).unwrap();
+    cache.insert(4, vec![1, 4, 9, 16]).unwrap();
+    cache.retain(|k, v| v.len() as u64 == *k);
+
+    assert_eq!(3, cache.len());
+    assert!(cache.contains(&1));
+    assert!(cache.contains(&4));
+    assert!(cache.contains(&5));
+}
+
+#[test]
+fn retain_works_if_none_match() {
+    let mut cache: LruCache<u64, Vec<u8>> = LruCache::new(1024);
+    cache.insert(1, vec![0, 1]).unwrap();
+    cache.insert(5, vec![2, 3, 5, 7, 11, 13]).unwrap();
+    cache.insert(4, vec![1, 4, 9, 16, 25]).unwrap();
+    cache.retain(|k, v| v.len() as u64 == *k);
+
+    assert_eq!(0, cache.len());
+    assert!(!cache.contains(&1));
+    assert!(!cache.contains(&4));
+    assert!(!cache.contains(&5));
+}
+
+#[test]
+fn retain_works_if_some_match() {
+    let mut cache: LruCache<u64, Vec<u8>> = LruCache::new(1024);
+    cache.insert(1, vec![0, 1]).unwrap();
+    cache.insert(5, vec![2, 3, 5, 7, 11]).unwrap();
+    cache.insert(4, vec![1, 4, 9, 16]).unwrap();
+    cache.retain(|k, v| v.len() as u64 == *k);
+
+    assert_eq!(2, cache.len());
+    assert!(!cache.contains(&1));
+    assert!(cache.contains(&4));
+    assert!(cache.contains(&5));
 }
 
 #[test]
@@ -288,7 +389,7 @@ fn cache_rejects_too_expanding_mutation() {
         v.append(&mut vec![0u8; 1000]);
     });
 
-    assert!(matches!(result, Err(LruError::EntryTooLarge { .. })));
+    assert!(matches!(result, Err(MutateError::EntryTooLarge { .. })));
     assert_eq!(1, cache.len());
     assert!(cache.current_size() < old_size);
     assert_eq!(None, cache.get("hello"));
@@ -302,7 +403,7 @@ where
     cache.insert(0, 0).unwrap();
     let entry_size = cache.current_size();
 
-    for i in 1..=5000 {
+    for i in 1..=1000 {
         cache.insert(i, i).unwrap();
 
         for j in 0..=(i / 2) {
@@ -437,6 +538,17 @@ fn separated_iters_zip_to_pair_iter() {
 }
 
 #[test]
+fn separated_into_iters_zip_to_pair_into_iter() {
+    let cache = large_test_cache();
+    let pair_iter_collected = cache.clone().into_iter().collect::<Vec<_>>();
+    let zip_iter_collected = cache.clone().into_keys()
+        .zip(cache.into_values())
+        .collect::<Vec<_>>();
+
+    assert_eq!(pair_iter_collected, zip_iter_collected);
+}
+
+#[test]
 fn drain_clears_cache() {
     let mut cache = LruCache::new(1024);
     cache.insert("hello", "world").unwrap();
@@ -527,5 +639,21 @@ fn empty_cache_builds_empty_iterators() {
     assert_is_empty(cache.keys());
     assert_is_empty(cache.values());
     assert_is_empty(cache.drain());
-    assert_is_empty(cache.into_iter());
+    assert_is_empty(cache.clone().into_iter());
+    assert_is_empty(cache.clone().into_keys());
+    assert_is_empty(cache.into_values());
+}
+
+#[test]
+fn touching_in_singleton_works() {
+    // Note: This weirdly specific test case isolates a previous bug.
+
+    let mut cache = LruCache::new(1024);
+    cache.insert("hello", "world").unwrap();
+    cache.touch("hello");
+
+    let mut iter = cache.keys();
+
+    assert_eq!(Some(&"hello"), iter.next());
+    assert_eq!(None, iter.next());
 }
