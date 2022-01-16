@@ -874,7 +874,7 @@ where
     fn new_capacity(&self, additional: usize)
             -> Result<usize, TryReserveError> {
         self.len().checked_add(additional)
-            .ok_or_else(|| TryReserveError::CapacityOverflow)
+            .ok_or(TryReserveError::CapacityOverflow)
     }
 
     /// Reserves capacity for at least `additional` new entries to be inserted
@@ -1527,7 +1527,7 @@ where
         // Check that the entry is not occupied
 
         let key = entry.key();
-        let hash = make_insert_hash::<K, S>(&self.hash_builder, &key);
+        let hash = make_insert_hash::<K, S>(&self.hash_builder, key);
 
         if self.table.find(hash, equivalent_key(key)).is_some() {
             let (key, value) = entry.into_key_value();

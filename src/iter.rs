@@ -239,7 +239,7 @@ impl<'a, K, V, S> Drop for Drain<'a, K, V, S> {
     fn drop(&mut self) {
         // Drop all allocated memory of the remaining elements.
 
-        while let Some(_) = self.next() { }
+        for _ in self.by_ref() { }
 
         // Set the cache as empty.
 
@@ -287,7 +287,7 @@ impl<K, V, S> DoubleEndedIterator for IntoIter<K, V, S> {
 impl<K, V, S> Drop for IntoIter<K, V, S> {
     fn drop(&mut self) {
         // Drop all allocated memory of the remaining elements.
-        while let Some(_) = self.next() { }
+        for _ in self.by_ref() { }
 
         // Clear items from the cache without dropping their memory.
         self.cache.table.clear_no_drop();
