@@ -120,7 +120,7 @@ pub trait HeapSize {
     /// # Example
     ///
     /// ```
-    /// use lru_mem::MemSize;
+    /// use lru_mem::HeapSize;
     ///
     /// assert_eq!(0, 1u64.heap_size());
     /// assert_eq!(12, "hello world!".to_owned().heap_size());

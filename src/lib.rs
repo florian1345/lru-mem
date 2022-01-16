@@ -541,7 +541,7 @@ impl<K, V, S> LruCache<K, V, S> {
     /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
     /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
     /// cache.insert("grapefruit".to_owned(), "bitter".to_owned()).unwrap();
-    /// let mut values = cache.into_keys().collect::<Vec<_>>();
+    /// let mut values = cache.into_values().collect::<Vec<_>>();
     ///
     /// assert_eq!(&"sweet".to_owned(), &values[0]);
     /// assert_eq!(&"sour".to_owned(), &values[1]);
@@ -1310,7 +1310,7 @@ where
     /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
     /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
     /// cache.insert("banana".to_owned(), "sweet".to_owned()).unwrap();
-    /// cache.retain(|_, v| &v == "sweet");
+    /// cache.retain(|_, v| v.as_str() == "sweet");
     ///
     /// assert_eq!(2, cache.len());
     /// assert!(cache.get("apple").is_some());
