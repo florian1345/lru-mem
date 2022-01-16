@@ -1310,7 +1310,7 @@ where
     /// cache.insert("apple".to_owned(), "sweet".to_owned()).unwrap();
     /// cache.insert("lemon".to_owned(), "sour".to_owned()).unwrap();
     /// cache.insert("banana".to_owned(), "sweet".to_owned()).unwrap();
-    /// cache.retain(|(_, v)| &v == "sweet");
+    /// cache.retain(|_, v| &v == "sweet");
     ///
     /// assert_eq!(2, cache.len());
     /// assert!(cache.get("apple").is_some());

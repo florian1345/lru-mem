@@ -154,9 +154,9 @@ impl<K, V> TryInsertError<K, V> {
     ///
     /// let mut cache = LruCache::new(1024);
     /// cache.insert("apple", "sweet").unwrap();
-    /// let res = cache.try_insert("apple", "sour");
+    /// let err = cache.try_insert("apple", "sour").unwrap_err();
     ///
-    /// assert_eq!((&"apple", &"sour"), res.entry());
+    /// assert_eq!((&"apple", &"sour"), err.entry());
     /// ```
     pub fn entry(&self) -> (&K, &V) {
         match self {
@@ -176,9 +176,9 @@ impl<K, V> TryInsertError<K, V> {
     ///
     /// let mut cache = LruCache::new(1024);
     /// cache.insert("apple", "sweet").unwrap();
-    /// let res = cache.try_insert("apple", "sour");
+    /// let err = cache.try_insert("apple", "sour").unwrap_err();
     ///
-    /// assert_eq!(&"apple", res.key());
+    /// assert_eq!(&"apple", err.key());
     /// ```
     pub fn key(&self) -> &K {
         self.entry().0
@@ -194,9 +194,9 @@ impl<K, V> TryInsertError<K, V> {
     ///
     /// let mut cache = LruCache::new(1024);
     /// cache.insert("apple", "sweet").unwrap();
-    /// let res = cache.try_insert("apple", "sour");
+    /// let err = cache.try_insert("apple", "sour").unwrap_err();
     ///
-    /// assert_eq!(&"sour", res.value());
+    /// assert_eq!(&"sour", err.value());
     /// ```
     pub fn value(&self) -> &V {
         self.entry().1
@@ -212,9 +212,9 @@ impl<K, V> TryInsertError<K, V> {
     ///
     /// let mut cache = LruCache::new(1024);
     /// cache.insert("apple", "sweet").unwrap();
-    /// let res = cache.try_insert("apple", "sour");
+    /// let err = cache.try_insert("apple", "sour").unwrap_err();
     ///
-    /// assert_eq!(("apple", "sour"), res.into_entry());
+    /// assert_eq!(("apple", "sour"), err.into_entry());
     /// ```
     pub fn into_entry(self) -> (K, V) {
         match self {
@@ -234,9 +234,9 @@ impl<K, V> TryInsertError<K, V> {
     ///
     /// let mut cache = LruCache::new(1024);
     /// cache.insert("apple", "sweet").unwrap();
-    /// let res = cache.try_insert("apple", "sour");
+    /// let err = cache.try_insert("apple", "sour").unwrap_err();
     ///
-    /// assert_eq!("apple", res.into_key());
+    /// assert_eq!("apple", err.into_key());
     /// ```
     pub fn into_key(self) -> K {
         self.into_entry().0
@@ -252,9 +252,9 @@ impl<K, V> TryInsertError<K, V> {
     ///
     /// let mut cache = LruCache::new(1024);
     /// cache.insert("apple", "sweet").unwrap();
-    /// let res = cache.try_insert("apple", "sour");
+    /// let err = cache.try_insert("apple", "sour").unwrap_err();
     ///
-    /// assert_eq!("sour", res.into_value());
+    /// assert_eq!("sour", err.into_value());
     /// ```
     pub fn into_value(self) -> V {
         self.into_entry().1
