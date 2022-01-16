@@ -1,3 +1,24 @@
+# v0.2
+
+## v0.2.0
+
+* Introduced new API for `LruCache` to better match `HashMap`
+    * `try_insert`
+    * `retain`
+    * `get_entry`/`peek_entry` to match `HashMap`'s `get_key_value`
+    * `into_keys`/`into_values`
+    * `hasher`
+* Introduced new `HeapSize` trait that determines the size of referenced data
+    * Useful for easier `MemSize` implementation of collections
+    * `MemSize` is blanket-implemented for `HeapSize + Sized`
+* Introduced new error types -- one for each fallible situation
+    * `InsertError` for fails in `LruCache::insert`
+    * `TryInsertError` for fails in `LruCache::try_insert`
+    * `MutateError` for fails in `LruCache::mutate`
+    * Removed `LruError`
+* Some minor documentation improvements
+* Internal restructuring which may change the performance in some situations
+
 # v0.1
 
 ## v0.1.5
