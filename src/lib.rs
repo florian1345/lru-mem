@@ -96,7 +96,7 @@ use entry::{Entry, EntryPtr, UnhingedEntry};
 pub use entry::entry_size;
 pub use error::{InsertError, MutateError, TryInsertError};
 pub use iter::{Drain, IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
-pub use mem_size::MemSize;
+pub use mem_size::{HeapSize, MemSize};
 
 /// An LRU (least-recently-used) cache that stores values associated with keys.
 /// Insertion, retrieval, and removal all have average-case complexity in O(1).
