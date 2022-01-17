@@ -82,7 +82,6 @@ use hashbrown::raw::RawTable;
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, BuildHasher};
-use std::hint;
 
 mod entry;
 mod error;
@@ -677,8 +676,9 @@ where
     }
 
     fn insert_untracked(&mut self, entry: Entry<K, V>) {
-        let entry_ptr = self.insert_into_table(entry)
-            .unwrap_or_else(|_| unsafe { hint::unreachable_unchecked() });
+        let entry_ptr = unsafe {
+            self.insert_into_table(entry).unwrap_unchecked()
+        };
         self.set_head(entry_ptr);
     }
 

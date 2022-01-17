@@ -8,8 +8,7 @@ use rand::rngs::ThreadRng;
 
 fn run_clone_benchmark(cache: &mut LruCache<u64, String>, _: &[u64],
         _: &mut ThreadRng) {
-    let clone = cache.clone();
-    assert_eq!(clone.len(), cache.len());
+    criterion::black_box(cache.clone());
 }
 
 pub(crate) fn clone_benchmark(c: &mut Criterion) {

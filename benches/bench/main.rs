@@ -14,6 +14,7 @@ mod insert;
 mod iter;
 mod peek;
 mod remove;
+mod retain;
 
 const VALUE_LEN: usize = 100;
 
@@ -123,6 +124,7 @@ criterion::criterion_group!(benches,
     insert::insert_benchmark,
     iter::iter_benchmark,
     peek::peek_benchmark,
-    remove::remove_benchmark
+    remove::remove_benchmark,
+    retain::retain_benchmark
 );
 criterion::criterion_main!(benches);
