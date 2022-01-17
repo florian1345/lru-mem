@@ -6,7 +6,7 @@ use lru_mem::LruCache;
 
 use rand::rngs::ThreadRng;
 
-fn run_retain_benchmark(cache: &mut LruCache<u64, String>, keys: &[u64],
+fn run_retain_benchmark(cache: &mut LruCache<u64, String>, _: &[u64],
         _: &mut ThreadRng) {
     cache.retain(|k, v| (*k + v.len() as u64) % 2 == 0);
 }

@@ -26,5 +26,7 @@ jobs:
       run: cargo build --verbose
     - name: Tests
       run: cargo test --verbose
+    - name: Benches
+      run: cargo bench --no-run --verbose
     - name: Documentation
       run: cargo doc --verbose
