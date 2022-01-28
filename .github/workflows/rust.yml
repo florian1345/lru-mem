@@ -18,6 +18,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - name: Version
+      run: |
+        rustup --version
+        cargo --version
+        cargo clippy --version
     - name: Clippy
       run: |
         rustup component add clippy
@@ -26,5 +31,7 @@ jobs:
       run: cargo build --verbose
     - name: Tests
       run: cargo test --verbose
+    - name: Benches
+      run: cargo bench --no-run --verbose
     - name: Documentation
       run: cargo doc --verbose

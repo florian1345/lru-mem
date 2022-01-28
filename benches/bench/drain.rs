@@ -6,11 +6,10 @@ use lru_mem::LruCache;
 
 use rand::rngs::ThreadRng;
 
-fn run_drain_benchmark(cache: &mut LruCache<u64, String>, keys: &[u64],
+fn run_drain_benchmark(cache: &mut LruCache<u64, String>, _: &[u64],
         _: &mut ThreadRng) {
-    for ((k, v), &expected_key) in cache.drain().zip(keys.iter()) {
-        assert_eq!(expected_key, k);
-        assert_eq!(crate::VALUE_LEN, v.len());
+    for entry in cache.drain() {
+        criterion::black_box(entry);
     }
 }
 
