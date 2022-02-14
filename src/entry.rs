@@ -248,3 +248,33 @@ impl<K, V> EntryPtr<K, V> {
         let _ = Box::from_raw(self.ptr);
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn entry_correctly_computes_size() {
+        let entry =
+            UnhingedEntry::new("hello".to_owned(), "world!".to_owned());
+
+        let key_str_bytes = 5;
+        let value_str_bytes = 6;
+        let str_meta_bytes = mem::size_of::<String>();
+        let usize_bytes = mem::size_of::<usize>();
+        let ptr_bytes = mem::size_of::<*mut Entry<String, String>>();
+
+        // We require key + value (key_str_bytes + value_str_bytes +
+        // 2 * str_meta_bytes), 1 usize (size of entry), and 2 pointers (next
+        // and prev).
+
+        let expected_bytes = key_str_bytes
+            + value_str_bytes
+            + 2 * str_meta_bytes
+            + usize_bytes
+            + 2 * ptr_bytes;
+
+        assert_eq!(expected_bytes, entry.size());
+    }
+}

@@ -527,3 +527,49 @@ impl HeapSize for PathBuf {
         self.as_path().mem_size()
     }
 }
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+
+    #[test]
+    fn tuples_have_correct_size() {
+        assert_eq!(mem::size_of::<(u16, u32, i16, char)>(),
+            (1u16, 2u32, 3i16, 'x').mem_size());
+        assert_eq!(mem::size_of::<((u8, i8, u8), i16)>(),
+            ((1u8, 2i8, 3u8), 4i16).mem_size());
+    }
+
+    #[test]
+    fn vectors_have_correct_size() {
+        let vec_size = mem::size_of::<Vec<u8>>();
+
+        assert_eq!(24 + vec_size,
+            vec!['a', 'b', 'c', 'd', 'e', 'f'].mem_size());
+        assert_eq!(24 + 4 * vec_size,
+            vec![vec![], vec![1u64, 2u64], vec![3u64]].mem_size());
+
+        let mut vec = Vec::with_capacity(8);
+        vec.push(1.0f64);
+
+        assert_eq!(64 + vec_size, vec.mem_size());
+    }
+
+    #[test]
+    fn strings_have_correct_size() {
+        let string_size = mem::size_of::<String>();
+
+        assert_eq!(11 + string_size, "hello world".to_owned().mem_size());
+        assert_eq!(26 + string_size,
+            "söme döüble byte chärs".to_owned().mem_size());
+    }
+
+    #[test]
+    fn options_have_correct_size() {
+        let some = Some(String::from("hello"));
+        let none = None::<String>;
+
+        assert_eq!(none.mem_size() + 5, some.mem_size());
+    }
+}
