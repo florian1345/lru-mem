@@ -310,7 +310,7 @@ impl<T: MemSize> MemSize for [T] {
 
 impl<T: MemSize, const N: usize> HeapSize for [T; N] {
     fn heap_size(&self) -> usize {
-        (&self[..]).heap_size()
+        self[..].heap_size()
     }
 }
 
