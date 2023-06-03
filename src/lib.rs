@@ -160,7 +160,7 @@ impl<K, V> LruCache<K, V> {
     /// ```
     pub fn new(max_size: usize) -> LruCache<K, V> {
         LruCache::with_table_and_hasher(max_size, RawTable::new(),
-            DefaultHashBuilder::new())
+            DefaultHashBuilder::default())
     }
 
     /// Creates a new, empty LRU cache with the given maximum memory size and
@@ -186,7 +186,7 @@ impl<K, V> LruCache<K, V> {
     /// ```
     pub fn with_capacity(max_size: usize, capacity: usize) -> LruCache<K, V> {
         LruCache::with_table_and_hasher(max_size,
-            RawTable::with_capacity(capacity), DefaultHashBuilder::new())
+            RawTable::with_capacity(capacity), DefaultHashBuilder::default())
     }
 }
 
@@ -549,10 +549,9 @@ impl<K, V, S> LruCache<K, V, S> {
     }
 }
 
-fn make_hash<K, Q, S>(hash_builder: &S, val: &Q) -> u64
+fn make_hash<K, S>(hash_builder: &S, val: &K) -> u64
 where
-    K: Borrow<Q>,
-    Q: Hash + ?Sized,
+    K: Hash + ?Sized,
     S: BuildHasher,
 {
     use core::hash::Hasher;
@@ -577,7 +576,7 @@ where
     K: Hash,
     S: BuildHasher
 {
-    move |val| make_hash::<K, K, S>(hash_builder, unsafe { val.key() })
+    move |val| make_hash::<K, S>(hash_builder, unsafe { val.key() })
 }
 
 fn equivalent_key<Q, K, V>(k: &Q) -> impl Fn(&Entry<K, V>) -> bool + '_
@@ -598,7 +597,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.remove_entry(hash, equivalent_key(key))
     }
 
@@ -607,7 +606,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.get(hash, equivalent_key(key))
     }
 
@@ -616,7 +615,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.get_mut(hash, equivalent_key(key))
     }
 
@@ -1227,7 +1226,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.find(hash, equivalent_key(key)).is_some()
     }
 
@@ -1404,7 +1403,7 @@ where
                 },
                 Err(returned_entry) => {
                     entry = returned_entry;
-                    self.reallocate(self.table.capacity() * 2 + 1);
+                    self.reallocate(self.table.capacity() + 1);
                     
                     // The seal pointer stays constant through reallocation, so
                     // only entry.next has to be set.
