@@ -549,10 +549,9 @@ impl<K, V, S> LruCache<K, V, S> {
     }
 }
 
-fn make_hash<K, Q, S>(hash_builder: &S, val: &Q) -> u64
+fn make_hash<K, S>(hash_builder: &S, val: &K) -> u64
 where
-    K: Borrow<Q>,
-    Q: Hash + ?Sized,
+    K: Hash + ?Sized,
     S: BuildHasher,
 {
     use core::hash::Hasher;
@@ -577,7 +576,7 @@ where
     K: Hash,
     S: BuildHasher
 {
-    move |val| make_hash::<K, K, S>(hash_builder, unsafe { val.key() })
+    move |val| make_hash::<K, S>(hash_builder, unsafe { val.key() })
 }
 
 fn equivalent_key<Q, K, V>(k: &Q) -> impl Fn(&Entry<K, V>) -> bool + '_
@@ -598,7 +597,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.remove_entry(hash, equivalent_key(key))
     }
 
@@ -607,7 +606,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.get(hash, equivalent_key(key))
     }
 
@@ -616,7 +615,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.get_mut(hash, equivalent_key(key))
     }
 
@@ -1227,7 +1226,7 @@ where
         K: Borrow<Q>,
         Q: Eq + Hash + ?Sized
     {
-        let hash = make_hash::<K, Q, S>(&self.hash_builder, key);
+        let hash = make_hash::<Q, S>(&self.hash_builder, key);
         self.table.find(hash, equivalent_key(key)).is_some()
     }
 
