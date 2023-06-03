@@ -160,7 +160,7 @@ impl<K, V> LruCache<K, V> {
     /// ```
     pub fn new(max_size: usize) -> LruCache<K, V> {
         LruCache::with_table_and_hasher(max_size, RawTable::new(),
-            DefaultHashBuilder::new())
+            DefaultHashBuilder::default())
     }
 
     /// Creates a new, empty LRU cache with the given maximum memory size and
@@ -186,7 +186,7 @@ impl<K, V> LruCache<K, V> {
     /// ```
     pub fn with_capacity(max_size: usize, capacity: usize) -> LruCache<K, V> {
         LruCache::with_table_and_hasher(max_size,
-            RawTable::with_capacity(capacity), DefaultHashBuilder::new())
+            RawTable::with_capacity(capacity), DefaultHashBuilder::default())
     }
 }
 
@@ -1404,7 +1404,7 @@ where
                 },
                 Err(returned_entry) => {
                     entry = returned_entry;
-                    self.reallocate(self.table.capacity() * 2 + 1);
+                    self.reallocate(self.table.capacity() + 1);
                     
                     // The seal pointer stays constant through reallocation, so
                     // only entry.next has to be set.
