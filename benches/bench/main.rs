@@ -1,3 +1,4 @@
+use std::time::Duration;
 use criterion::BenchmarkGroup;
 use criterion::measurement::WallTime;
 
@@ -94,27 +95,21 @@ where
         }));
 }
 
-const CONSTANT_TIME_SIZES: &'static [usize] = &[
+const LINEAR_TIME_SIZES: &'static [usize] = &[
     4 * 1024,
-    16* 1024,
     64 * 1024,
-    256 * 1024,
     1024 * 1024,
-    4 * 1024 * 1024,
-    16 * 1024 * 1024,
-    64 * 1024 * 1024
+    16 * 1024 * 1024
 ];
 
-const LINEAR_TIME_SIZES: &'static [usize] = &[
+const CONSTANT_TIME_SIZES: &'static [usize] = &[
     64 * 1024,
-    256 * 1024,
     1024 * 1024,
-    4 * 1024 * 1024,
     16 * 1024 * 1024,
-    64 * 1024 * 1024,
-    256 * 1024 * 1024,
-    1024 * 1024 * 1024
+    256 * 1024 * 1024
 ];
+
+const BENCH_DURATION: Duration = Duration::from_secs(15);
 
 criterion::criterion_group!(benches,
     alloc::alloc_benchmark,

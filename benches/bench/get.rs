@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use criterion::Criterion;
 
 use lru_mem::LruCache;
@@ -16,9 +14,9 @@ fn run_get_benchmark(cache: &mut LruCache<u64, String>, keys: &[u64],
 
 pub(crate) fn get_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("get");
-    group.sample_size(100).measurement_time(Duration::from_secs(60));
+    group.sample_size(100).measurement_time(crate::BENCH_DURATION);
 
-    for &size in crate::LINEAR_TIME_SIZES {
+    for &size in crate::CONSTANT_TIME_SIZES {
         crate::bench_cache_function(
             &mut group, size, run_get_benchmark);
     }
