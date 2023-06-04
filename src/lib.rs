@@ -75,24 +75,24 @@
 //!
 //! For further details on how to use the cache, see the [LruCache] struct.
 
-use hashbrown::TryReserveError;
-use hashbrown::hash_map::DefaultHashBuilder;
-use hashbrown::raw::RawTable;
-
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Formatter};
-use std::hash::{Hash, BuildHasher};
+use std::hash::{BuildHasher, Hash};
 
-mod entry;
-mod error;
-mod iter;
-mod mem_size;
+use hashbrown::hash_map::DefaultHashBuilder;
+use hashbrown::raw::RawTable;
+use hashbrown::TryReserveError;
 
 use entry::{Entry, EntryPtr, UnhingedEntry};
 pub use entry::entry_size;
 pub use error::{InsertError, MutateError, TryInsertError};
 pub use iter::{Drain, IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
 pub use mem_size::{HeapSize, MemSize};
+
+mod entry;
+mod error;
+mod iter;
+mod mem_size;
 
 /// An LRU (least-recently-used) cache that stores values associated with keys.
 /// Insertion, retrieval, and removal all have average-case complexity in O(1).
@@ -678,35 +678,32 @@ where
         self.set_head(entry_ptr);
     }
 
-    fn reallocate_with<F, R>(&mut self, reserve: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R
-    {
-        let mut entries = Vec::with_capacity(self.len());
-        let mut tail = self.seal.get().prev;
+    fn try_reallocate(&mut self, new_capacity: usize) -> Result<(), TryReserveError> {
+        let hasher = make_hasher(&self.hash_builder);
+        let mut new_table = RawTable::try_with_capacity(new_capacity)?;
 
-        while tail != self.seal {
-            let entry = unsafe { tail.read() };
-            tail = entry.prev;
-            entries.push(entry);
+        let mut prev_inserted = self.seal;
+        let mut next_to_insert = self.seal.get().next;
+
+        while next_to_insert != self.seal {
+            let mut entry = unsafe { next_to_insert.read() };
+            entry.prev = prev_inserted;
+            next_to_insert = entry.next;
+            let bucket = new_table.insert(hasher(&entry), entry, &hasher);
+            let next_inserted = EntryPtr::new(bucket.as_ptr());
+            prev_inserted.get_mut().next = next_inserted;
+            prev_inserted = next_inserted;
         }
 
+        self.seal.get_mut().prev = prev_inserted;
         self.table.clear_no_drop();
-        let result = reserve(self);
+        self.table = new_table;
 
-        self.seal.get_mut().next = self.seal;
-        self.seal.get_mut().prev = self.seal;
-
-        for entry in entries {
-            self.insert_untracked(entry);
-        }
-
-        result
+        Ok(())
     }
 
     fn reallocate(&mut self, new_capacity: usize) {
-        self.reallocate_with(|this|
-            this.table.reserve(new_capacity, make_hasher(&this.hash_builder)))
+        self.try_reallocate(new_capacity).unwrap()
     }
 
     fn lru_ptr(&self) -> Option<EntryPtr<K, V>> {
@@ -933,9 +930,7 @@ where
         let new_capacity = self.new_capacity(additional)?;
 
         if self.capacity() < new_capacity {
-            self.reallocate_with(|this|
-                this.table.try_reserve(new_capacity,
-                    make_hasher(&this.hash_builder)))
+            self.try_reallocate(new_capacity)
         }
         else {
             Ok(())
@@ -969,9 +964,7 @@ where
         let new_capacity = self.len().max(min_capacity);
 
         if self.capacity() > new_capacity {
-            self.reallocate_with(|this|
-                this.table.shrink_to(new_capacity,
-                    make_hasher(&this.hash_builder)))
+            self.reallocate(new_capacity);
         }
     }
 
@@ -1717,7 +1710,6 @@ unsafe impl<K: Sync, V: Sync, S: Sync> Sync for LruCache<K, V, S> { }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]
