@@ -78,6 +78,7 @@
 use std::borrow::Borrow;
 use std::fmt::{self, Debug, Formatter};
 use std::hash::{BuildHasher, Hash};
+use std::mem;
 
 use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::raw::RawTable;
@@ -481,8 +482,8 @@ impl<K, V, S> LruCache<K, V, S> {
     ///
     /// Note it is important for the drain to be dropped in order to ensure
     /// integrity of the data structure. Preventing it from being dropped, e.g.
-    /// using [mem::forget](std::mem::forget), can result in unexpected
-    /// behavior of the cache.
+    /// using [mem::forget](mem::forget), can result in unexpected behavior of
+    /// the cache.
     ///
     /// # Example
     ///
@@ -680,24 +681,17 @@ where
 
     fn try_reallocate(&mut self, new_capacity: usize) -> Result<(), TryReserveError> {
         let hasher = make_hasher(&self.hash_builder);
-        let mut new_table = RawTable::try_with_capacity(new_capacity)?;
+        let mut old_table = RawTable::try_with_capacity(new_capacity)?;
+        mem::swap(&mut self.table, &mut old_table);
 
-        let mut prev_inserted = self.seal;
-        let mut next_to_insert = self.seal.get().next;
-
-        while next_to_insert != self.seal {
-            let mut entry = unsafe { next_to_insert.read() };
-            entry.prev = prev_inserted;
-            next_to_insert = entry.next;
-            let bucket = new_table.insert(hasher(&entry), entry, &hasher);
-            let next_inserted = EntryPtr::new(bucket.as_ptr());
-            prev_inserted.get_mut().next = next_inserted;
-            prev_inserted = next_inserted;
+        for entry in old_table.into_iter() {
+            let mut prev_entry = entry.prev;
+            let mut next_entry = entry.next;
+            let bucket = self.table.insert(hasher(&entry), entry, &hasher);
+            let entry_ptr = EntryPtr::new(bucket.as_ptr());
+            prev_entry.get_mut().next = entry_ptr;
+            next_entry.get_mut().prev = entry_ptr;
         }
-
-        self.seal.get_mut().prev = prev_inserted;
-        self.table.clear_no_drop();
-        self.table = new_table;
 
         Ok(())
     }
