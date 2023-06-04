@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use criterion::Criterion;
 
 use lru_mem::LruCache;
@@ -13,9 +11,9 @@ fn run_clone_benchmark(cache: &mut LruCache<u64, String>, _: &[u64],
 
 pub(crate) fn clone_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("clone");
-    group.sample_size(100).measurement_time(Duration::from_secs(60));
+    group.sample_size(100).measurement_time(crate::BENCH_DURATION);
 
-    for &size in crate::CONSTANT_TIME_SIZES {
+    for &size in crate::LINEAR_TIME_SIZES {
         crate::bench_cache_function(
             &mut group, size, run_clone_benchmark);
     }
