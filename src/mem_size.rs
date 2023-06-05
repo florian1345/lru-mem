@@ -533,6 +533,8 @@ mod test {
 
     use super::*;
 
+    const VEC_SIZE: usize = mem::size_of::<Vec<u8>>();
+
     #[test]
     fn tuples_have_correct_size() {
         assert_eq!(mem::size_of::<(u16, u32, i16, char)>(),
@@ -543,17 +545,15 @@ mod test {
 
     #[test]
     fn vectors_have_correct_size() {
-        let vec_size = mem::size_of::<Vec<u8>>();
-
-        assert_eq!(24 + vec_size,
+        assert_eq!(24 + VEC_SIZE,
             vec!['a', 'b', 'c', 'd', 'e', 'f'].mem_size());
-        assert_eq!(24 + 4 * vec_size,
+        assert_eq!(24 + 4 * VEC_SIZE,
             vec![vec![], vec![1u64, 2u64], vec![3u64]].mem_size());
 
         let mut vec = Vec::with_capacity(8);
         vec.push(1.0f64);
 
-        assert_eq!(64 + vec_size, vec.mem_size());
+        assert_eq!(64 + VEC_SIZE, vec.mem_size());
     }
 
     #[test]
@@ -571,5 +571,26 @@ mod test {
         let none = None::<String>;
 
         assert_eq!(none.mem_size() + 5, some.mem_size());
+    }
+
+    #[test]
+    fn wrapping_have_correct_size() {
+        let wrapping = Wrapping(0u64);
+
+        assert_eq!(8, wrapping.mem_size());
+    }
+
+    #[test]
+    fn arrays_with_primitive_entries_have_correct_size() {
+        let array = [0u64; 4];
+
+        assert_eq!(32, array.mem_size());
+    }
+
+    #[test]
+    fn arrays_with_complex_entries_have_correct_size() {
+        let array = [vec![], Vec::<u64>::with_capacity(4)];
+
+        assert_eq!(2 * VEC_SIZE + 32, array.mem_size());
     }
 }
