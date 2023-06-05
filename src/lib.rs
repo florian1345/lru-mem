@@ -1704,7 +1704,25 @@ unsafe impl<K: Sync, V: Sync, S: Sync> Sync for LruCache<K, V, S> { }
 
 #[cfg(test)]
 mod tests {
+    use std::hash::Hasher;
+    use std::sync::{Arc, Mutex};
     use super::*;
+
+    pub(crate) fn singleton_test_cache() -> LruCache<&'static str, &'static str> {
+        let mut cache = LruCache::new(1024);
+        cache.insert("hello", "world").unwrap();
+        cache
+    }
+
+    pub(crate) fn large_test_cache() -> LruCache<&'static str, &'static str> {
+        let mut cache = LruCache::new(1024);
+        cache.insert("hello", "world").unwrap();
+        cache.insert("greetings", "moon").unwrap();
+        cache.insert("ahoy", "mars").unwrap();
+        cache.insert("hi", "venus").unwrap();
+        cache.insert("good morning", "jupiter").unwrap();
+        cache
+    }
 
     #[test]
     fn cache_correctly_inserts_with_sufficient_capacity() {
@@ -1809,6 +1827,31 @@ mod tests {
         assert_eq!("c", unsafe { cache.seal.get().prev.get().key() });
         assert_eq!("a", unsafe { cache.seal.get().next.get().key() });
     }
+
+    #[test]
+    fn empty_cache_has_no_lru_and_mru() {
+        let cache = LruCache::<&str, &str>::new(1024);
+
+        assert!(cache.peek_lru().is_none());
+        assert!(cache.peek_mru().is_none());
+    }
+
+    #[test]
+    fn get_lru_sets_most_recently_used() {
+        let mut cache = LruCache::new(2048);
+
+        cache.insert("hello", "world").unwrap();
+        cache.insert("greetings", "moon").unwrap();
+
+        let lru = cache.get_lru();
+
+        assert_eq!(Some((&"hello", &"world")), lru);
+
+        cache.set_max_size(cache.current_size() - 1);
+
+        assert!(cache.contains("hello"));
+        assert!(!cache.contains("greetings"));
+    }
     
     #[test]
     fn peeking_does_not_set_most_recently_used() {
@@ -1822,6 +1865,13 @@ mod tests {
         assert!(cache.get("a").is_none());
         assert!(cache.get("b").is_some());
         assert!(cache.get("c").is_some());
+
+        cache.peek_entry(&"b".to_owned());
+        cache.insert("d".to_owned(), string_with_size(674)).unwrap();
+
+        assert!(cache.get("b").is_none());
+        assert!(cache.get("c").is_some());
+        assert!(cache.get("d").is_some());
     }
     
     #[test]
@@ -1916,6 +1966,28 @@ mod tests {
     
         assert_eq!(Some(("hello", "world")), cache.remove_entry("hello"));
         assert_eq!(None, cache.remove("hello"));
+    }
+
+    #[test]
+    fn removing_mru_works() {
+        let mut cache = LruCache::new(1024);
+        cache.insert("hello", "world").unwrap();
+        cache.insert("greetings", "moon").unwrap();
+        cache.insert("ahoy", "mars").unwrap();
+        cache.remove_mru();
+
+        assert_eq!(2, cache.len());
+        assert!(cache.contains("hello"));
+        assert!(cache.contains("greetings"));
+    }
+
+    #[test]
+    fn clearing_works() {
+        let mut cache = large_test_cache();
+        cache.clear();
+
+        assert!(cache.is_empty());
+        assert!(cache.iter().next().is_none());
     }
     
     #[test]
@@ -2036,6 +2108,30 @@ mod tests {
         assert!(cache.current_size() < old_size);
         assert_eq!(None, cache.get("hello"));
     }
+
+    #[test]
+    fn non_expanding_mutation_works() {
+        let mut cache = LruCache::new(1024);
+        cache.insert("hello", vec![0u8; 32]).unwrap();
+        cache.insert("greetings", vec![0u8; 32]).unwrap();
+
+        let old_size = cache.current_size();
+        let result = cache.mutate("hello", |v| {
+            *v = Vec::new();
+        });
+
+        assert!(matches!(result, Ok(Some(_))));
+        assert!(cache.current_size() < old_size);
+        assert_eq!(2, cache.len());
+    }
+
+    #[test]
+    fn mutation_on_non_existant_element_is_never_called() {
+        let mut cache = LruCache::<&str, &str>::new(1024);
+        let result = cache.mutate("hello", |_| { panic!("mutation was called") });
+
+        assert_eq!(Ok(None), result);
+    }
     
     #[test]
     fn reserving_adds_capacity() {
@@ -2046,7 +2142,7 @@ mod tests {
         cache.reserve(additional);
     
         assert!(cache.capacity() >= additional + 2);
-        assert!(cache.len() == 2);
+        assert_eq!(2, cache.len());
         assert_eq!(Some((&"hello", &"world")), cache.peek_lru());
         assert_eq!(Some((&"greetings", &"moon")), cache.peek_mru());
     
@@ -2055,6 +2151,17 @@ mod tests {
         assert!(cache.try_reserve(additional).is_ok());
         assert!(cache.capacity() >= additional + 2);
     }
+
+    #[test]
+    fn reserving_does_not_change_anything_when_capacity_is_not_exceeded() {
+        let mut cache = LruCache::with_capacity(1024, 5);
+        cache.insert("hello", "world").unwrap();
+        cache.insert("greetings", "moon").unwrap();
+        let capacity_before = cache.capacity();
+
+        assert!(cache.try_reserve(3).is_ok());
+        assert_eq!(capacity_before, cache.capacity());
+    }
     
     #[test]
     fn reserving_fails_on_overflow() {
@@ -2062,16 +2169,6 @@ mod tests {
         cache.insert("hello", "world").unwrap();
     
         assert!(cache.try_reserve(usize::MAX).is_err());
-    }
-    
-    fn large_test_cache() -> LruCache<&'static str, &'static str> {
-        let mut cache = LruCache::new(1024);
-        cache.insert("hello", "world").unwrap();
-        cache.insert("greetings", "moon").unwrap();
-        cache.insert("ahoy", "mars").unwrap();
-        cache.insert("hi", "venus").unwrap();
-        cache.insert("good morning", "jupiter").unwrap();
-        cache
     }
     
     #[test]
@@ -2089,138 +2186,102 @@ mod tests {
         assert!(cache.capacity() >= 7);
         assert_eq!(7, cache.len());
     }
-    
+
     #[test]
-    fn iter_works() {
-        let cache = large_test_cache();
-        let mut iter = cache.iter();
-    
-        assert_eq!(Some((&"hello", &"world")), iter.next());
-        assert_eq!(Some((&"good morning", &"jupiter")), iter.next_back());
-        assert_eq!(Some((&"hi", &"venus")), iter.next_back());
-        assert_eq!(Some((&"ahoy", &"mars")), iter.next_back());
-        assert_eq!(Some((&"greetings", &"moon")), iter.next());
-        assert_eq!(None, iter.next_back());
-        assert_eq!(None, iter.next());
+    fn cache_created_with_capacity_does_not_reallocate_before_capacity_is_reached() {
+        let mut cache = LruCache::with_capacity(4096, 10);
+        let capacity_before = cache.capacity();
+
+        assert!(capacity_before >= 10);
+
+        for i in 0..10 {
+            cache.insert(i, "value").unwrap();
+        }
+
+        assert_eq!(capacity_before, cache.capacity());
     }
-    
-    #[test]
-    fn separated_iters_zip_to_pair_iter() {
-        let cache = large_test_cache();
-        let pair_iter_collected = cache.iter().collect::<Vec<_>>();
-        let zip_iter_collected = cache.keys()
-            .zip(cache.values())
-            .collect::<Vec<_>>();
-    
-        assert_eq!(pair_iter_collected, zip_iter_collected);
+
+    struct MockHasher {
+        hash_requests: Arc<Mutex<u32>>
     }
-    
-    #[test]
-    fn separated_into_iters_zip_to_pair_into_iter() {
-        let cache = large_test_cache();
-        let pair_iter_collected =
-            cache.clone().into_iter().collect::<Vec<_>>();
-        let zip_iter_collected = cache.clone().into_keys()
-            .zip(cache.into_values())
-            .collect::<Vec<_>>();
-    
-        assert_eq!(pair_iter_collected, zip_iter_collected);
+
+    impl Hasher for MockHasher {
+        fn finish(&self) -> u64 {
+            *self.hash_requests.lock().unwrap() += 1;
+            0
+        }
+
+        fn write(&mut self, _bytes: &[u8]) { }
     }
-    
+
+    struct MockBuildHasher {
+        hash_requests: Arc<Mutex<u32>>
+    }
+
+    impl BuildHasher for MockBuildHasher {
+        type Hasher = MockHasher;
+
+        fn build_hasher(&self) -> Self::Hasher {
+            MockHasher {
+                hash_requests: Arc::clone(&self.hash_requests)
+            }
+        }
+    }
+
     #[test]
-    fn drain_clears_cache() {
-        let mut cache = LruCache::new(1024);
+    fn cache_uses_given_hasher() {
+        let build_hasher = MockBuildHasher {
+            hash_requests: Arc::new(Mutex::new(0))
+        };
+        let mut cache = LruCache::with_hasher(1024, build_hasher);
+
+        assert_eq!(0, *cache.hasher().hash_requests.lock().unwrap());
+
         cache.insert("hello", "world").unwrap();
+
+        assert_eq!(1, *cache.hasher().hash_requests.lock().unwrap());
+
         cache.insert("greetings", "moon").unwrap();
-        cache.drain().next();
-    
-        assert_eq!(0, cache.len());
-        assert_eq!(0, cache.current_size());
-        assert!(cache.get("hello").is_none());
+        cache.insert("ahoy", "mars").unwrap();
+
+        assert_eq!(3, *cache.hasher().hash_requests.lock().unwrap());
     }
-    
-    fn test_owning_iterator<I>(mut iter: I)
-    where
-        I: Iterator<Item = (&'static str, &'static str)> + DoubleEndedIterator
-    {
-        assert_eq!(Some(("hello", "world")), iter.next());
-        assert_eq!(Some(("good morning", "jupiter")), iter.next_back());
-        assert_eq!(Some(("hi", "venus")), iter.next_back());
-        assert_eq!(Some(("ahoy", "mars")), iter.next_back());
-        assert_eq!(Some(("greetings", "moon")), iter.next());
-        assert_eq!(None, iter.next_back());
-        assert_eq!(None, iter.next());
-    }
-    
-    #[test]
-    fn drain_returns_entries() {
-        let mut cache = large_test_cache();
-        let drain = cache.drain();
-        test_owning_iterator(drain);
-    }
-    
-    #[test]
-    fn into_iter_returns_entries() {
-        let cache = large_test_cache();
-        let into_iter = cache.into_iter();
-        test_owning_iterator(into_iter);
-    }
-    
+
     #[test]
     fn clone_creates_independent_cache() {
         let mut cache = LruCache::new(1024);
-        cache.insert(0u64, vec![0u8; 32]).unwrap();
-        cache.insert(1u64, vec![1u8; 32]).unwrap();
+        cache.insert("hello", "world").unwrap();
+        cache.insert("greetings", "moon").unwrap();
     
         let mut clone = cache.clone();
-        clone.insert(2u64, vec![2u8; 32]).unwrap();
-        cache.remove(&0);
-        cache.touch(&1);
+        clone.insert("ahoy", "mars").unwrap();
+
+        cache.remove(&"hello");
+        cache.touch(&"greetings");
     
         assert_eq!(1, cache.len());
-        assert_eq!(None, cache.get(&0));
-        assert_eq!(Some(&vec![1u8; 32]), cache.get(&1));
-        assert_eq!(None, cache.get(&2));
+        assert_eq!(None, cache.get(&"hello"));
+        assert_eq!(Some(&"moon"), cache.get(&"greetings"));
+        assert_eq!(None, cache.get(&"ahoy"));
     
         assert_eq!(3, clone.len());
-        assert_eq!(Some(&vec![0u8; 32]), clone.get(&0));
-        assert_eq!(Some(&vec![1u8; 32]), clone.get(&1));
-        assert_eq!(Some(&vec![2u8; 32]), clone.get(&2));
+        assert_eq!(Some(&"world"), clone.get(&"hello"));
+        assert_eq!(Some(&"moon"), clone.get(&"greetings"));
+        assert_eq!(Some(&"mars"), clone.get(&"ahoy"));
     
         assert!(clone.current_size() > cache.current_size());
-    
+
         let cache_drained = cache.drain().collect::<Vec<_>>();
-        let cache_drained_expected = vec![(1, vec![1u8; 32])];
+        let cache_drained_expected = vec![("greetings", "moon")];
         let clone_drained = clone.drain().collect::<Vec<_>>();
         let clone_drained_expected = vec![
-            (0, vec![0u8; 32]),
-            (1, vec![1u8; 32]),
-            (2, vec![2u8; 32])
+            ("hello", "world"),
+            ("greetings", "moon"),
+            ("ahoy", "mars")
         ];
-    
+
         assert_eq!(cache_drained_expected, cache_drained);
         assert_eq!(clone_drained_expected, clone_drained);
-    }
-    
-    fn assert_is_empty<T, I>(mut iterator: I)
-    where
-        I: Iterator<Item = T> + DoubleEndedIterator
-    {
-        assert!(iterator.next().is_none());
-        assert!(iterator.next_back().is_none());
-    }
-    
-    #[test]
-    fn empty_cache_builds_empty_iterators() {
-        let mut cache: LruCache<String, String> = LruCache::new(1024);
-    
-        assert_is_empty(cache.iter());
-        assert_is_empty(cache.keys());
-        assert_is_empty(cache.values());
-        assert_is_empty(cache.drain());
-        assert_is_empty(cache.clone().into_iter());
-        assert_is_empty(cache.clone().into_keys());
-        assert_is_empty(cache.into_values());
     }
     
     #[test]
