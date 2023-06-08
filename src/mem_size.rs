@@ -251,8 +251,10 @@ basic_mem_size!(ThreadId);
 
 basic_mem_size!(Ipv4Addr);
 basic_mem_size!(Ipv6Addr);
+basic_mem_size!(IpAddr);
 basic_mem_size!(SocketAddrV4);
 basic_mem_size!(SocketAddrV6);
+basic_mem_size!(SocketAddr);
 
 basic_mem_size!(RandomState);
 
@@ -362,13 +364,13 @@ impl<T: MemSize + ?Sized> HeapSize for Box<T> {
 
 impl<T: MemSize> HeapSize for Mutex<T> {
     fn heap_size(&self) -> usize {
-        self.lock().unwrap().mem_size()
+        self.lock().unwrap().heap_size()
     }
 }
 
 impl<T: MemSize> HeapSize for RwLock<T> {
     fn heap_size(&self) -> usize {
-        self.read().unwrap().mem_size()
+        self.read().unwrap().heap_size()
     }
 }
 
@@ -428,12 +430,14 @@ impl HeapSize for OsString {
 
 impl<T: ?Sized> HeapSize for &T {
     fn heap_size(&self) -> usize {
+        // cache is not data owner => only memory for reference itself counted
         0
     }
 }
 
 impl<T: ?Sized> HeapSize for &mut T {
     fn heap_size(&self) -> usize {
+        // cache is not data owner => only memory for reference itself counted
         0
     }
 }
@@ -459,24 +463,6 @@ impl<V: MemSize, E: MemSize> HeapSize for Result<V, E> {
 impl<T> HeapSize for PhantomData<T> {
     fn heap_size(&self) -> usize {
         0
-    }
-}
-
-impl HeapSize for IpAddr {
-    fn heap_size(&self) -> usize {
-        match self {
-            IpAddr::V4(v4) => v4.heap_size(),
-            IpAddr::V6(v6) => v6.heap_size()
-        }
-    }
-}
-
-impl HeapSize for SocketAddr {
-    fn heap_size(&self) -> usize {
-        match self {
-            SocketAddr::V4(v4) => v4.heap_size(),
-            SocketAddr::V6(v6) => v6.heap_size()
-        }
     }
 }
 
@@ -530,7 +516,6 @@ impl HeapSize for PathBuf {
 
 #[cfg(test)]
 mod test {
-
     use super::*;
 
     const VEC_SIZE: usize = mem::size_of::<Vec<u8>>();
@@ -538,6 +523,8 @@ mod test {
     const BOXED_SLICE_SIZE: usize = mem::size_of::<Box<[u8]>>();
     const HASH_MAP_SIZE: usize = mem::size_of::<HashMap<u8, u8>>();
     const HASH_SET_SIZE: usize = mem::size_of::<HashSet<u8>>();
+    const BINARY_HEAP_SIZE: usize = mem::size_of::<BinaryHeap<u8>>();
+    const STRING_RESULT_SIZE: usize = mem::size_of::<Result<String, String>>();
 
     #[test]
     fn tuples_have_correct_size() {
@@ -565,6 +552,11 @@ mod test {
         assert_eq!(11 + STRING_SIZE, "hello world".to_owned().mem_size());
         assert_eq!(26 + STRING_SIZE,
             "söme döüble byte chärs".to_owned().mem_size());
+    }
+
+    #[test]
+    fn string_with_spare_capacity_has_correct_size() {
+        assert_eq!(16 + STRING_SIZE, String::with_capacity(16).mem_size());
     }
 
     #[test]
@@ -679,5 +671,206 @@ mod test {
             STRING_SIZE * hash_set.capacity() + HASH_SET_SIZE + number_of_chars;
 
         assert_eq!(expected_size, hash_set.mem_size());
+    }
+
+    #[test]
+    fn empty_binary_heap_has_correct_size() {
+        let binary_heap = BinaryHeap::<String>::new();
+
+        assert_eq!(BINARY_HEAP_SIZE, binary_heap.mem_size());
+    }
+
+    #[test]
+    fn binary_heap_of_primitives_has_correct_size() {
+        let mut binary_heap = BinaryHeap::with_capacity(5);
+        binary_heap.push(1u16);
+        binary_heap.push(2u16);
+        binary_heap.push(3u16);
+
+        assert_eq!(BINARY_HEAP_SIZE + 10, binary_heap.mem_size());
+    }
+
+    #[test]
+    fn binary_heap_of_complex_entries_has_correct_size() {
+        let mut binary_heap = BinaryHeap::with_capacity(7);
+        binary_heap.push("hello".to_owned());
+        binary_heap.push("greetings".to_owned());
+        binary_heap.push("ahoy".to_owned());
+
+        let number_of_chars = 18;
+        let expected_size =
+            STRING_SIZE * 7 + BINARY_HEAP_SIZE + number_of_chars;
+
+        assert_eq!(expected_size, binary_heap.mem_size());
+    }
+
+    #[test]
+    fn mutex_of_primitive_type_has_correct_size() {
+        let mutex = Mutex::new(0u64);
+
+        assert_eq!(mem::size_of::<Mutex<u64>>(), mutex.mem_size());
+    }
+
+    #[test]
+    fn mutex_of_complex_type_has_correct_size() {
+        let mutex = Mutex::new("hello".to_owned());
+
+        assert_eq!(mem::size_of::<Mutex<String>>() + 5, mutex.mem_size());
+    }
+
+    #[test]
+    fn rw_lock_of_primitive_type_has_correct_size() {
+        let rw_lock = RwLock::new(0u64);
+
+        assert_eq!(mem::size_of::<RwLock<u64>>(), rw_lock.mem_size());
+    }
+
+    #[test]
+    fn rw_lock_of_complex_type_has_correct_size() {
+        let rw_lock = RwLock::new("hello".to_owned());
+
+        assert_eq!(mem::size_of::<RwLock<String>>() + 5, rw_lock.mem_size());
+    }
+
+    #[test]
+    fn boxed_str_has_correct_size() {
+        let string = "hello".to_owned().into_boxed_str();
+
+        assert_eq!(mem::size_of::<Box<str>>() + 5, string.mem_size());
+    }
+
+    #[test]
+    fn boxed_cstr_has_correct_size() {
+        let string = CString::new("hello").unwrap().into_boxed_c_str();
+
+        assert_eq!(mem::size_of::<Box<CStr>>() + 6, string.mem_size());
+    }
+
+    #[test]
+    fn cstring_has_correct_size(){
+        let string = CString::new("hello").unwrap();
+
+        assert_eq!(mem::size_of::<CString>() + 6, string.mem_size());
+    }
+
+    #[test]
+    fn references_have_correct_size() {
+        assert_eq!(mem::size_of::<&u8>(),
+            <&String>::mem_size(&&"hello".to_owned()));
+        assert_eq!(mem::size_of::<&u8>(),
+            <&mut String>::mem_size(&&mut "hello".to_owned()));
+    }
+
+    #[test]
+    fn some_variant_of_primitive_type_has_correct_size() {
+        assert_eq!(2, Some(NonZeroI16::new(1).unwrap()).mem_size());
+    }
+
+    #[test]
+    fn some_variant_of_complex_type_has_correct_size() {
+        let option = Some("hello".to_owned()).mem_size();
+
+        assert_eq!(mem::size_of::<Option<String>>() + 5, option);
+    }
+
+    #[test]
+    fn none_variant_has_correct_size() {
+        assert_eq!(2, None::<NonZeroI16>.mem_size());
+    }
+
+    #[test]
+    fn ok_variant_of_primitive_type_has_correct_size() {
+        let result: Result<u64, u64> = Ok(1);
+
+        assert_eq!(mem::size_of::<Result<u64, u64>>(), result.mem_size());
+    }
+
+    #[test]
+    fn err_variant_of_primitive_type_has_correct_size() {
+        let result: Result<u32, u32> = Err(2);
+
+        assert_eq!(mem::size_of::<Result<u32, u32>>(), result.mem_size());
+    }
+
+    #[test]
+    fn ok_variant_of_complex_type_has_correct_size() {
+        let result: Result<String, String> = Ok("hello".to_owned());
+
+        assert_eq!(STRING_RESULT_SIZE + 5, result.mem_size());
+    }
+
+    #[test]
+    fn err_variant_of_complex_type_has_correct_size() {
+        let result: Result<String, String> = Err("world".to_owned());
+
+        assert_eq!(STRING_RESULT_SIZE + 5, result.mem_size());
+    }
+
+    #[test]
+    fn phantom_data_has_zero_size() {
+        assert_eq!(0, PhantomData::<String>.mem_size());
+    }
+
+    #[test]
+    fn ip_addresses_have_correct_size() {
+        const IP_ADDR_SIZE: usize = mem::size_of::<IpAddr>();
+
+        let v4 = IpAddr::V4("1.2.3.4".parse().unwrap());
+        let v6 = IpAddr::V6("1234::4321".parse().unwrap());
+
+        assert_eq!(IP_ADDR_SIZE, v4.mem_size());
+        assert_eq!(IP_ADDR_SIZE, v6.mem_size());
+    }
+
+    #[test]
+    fn socket_addresses_have_correct_size() {
+        const SOCKET_ADDR_SIZE: usize = mem::size_of::<SocketAddr>();
+
+        let v4 = SocketAddr::V4("1.2.3.4:1337".parse().unwrap());
+        let v6 = SocketAddr::V6("[1234::4321]:1337".parse().unwrap());
+
+        assert_eq!(SOCKET_ADDR_SIZE, v4.mem_size());
+        assert_eq!(SOCKET_ADDR_SIZE, v6.mem_size());
+    }
+
+    #[test]
+    fn full_range_has_zero_size() {
+        assert_eq!(0, (..).mem_size());
+    }
+
+    struct MockRangeable {
+        heap_size: usize
+    }
+
+    impl MockRangeable {
+        fn new(heap_size: usize) -> MockRangeable {
+            MockRangeable { heap_size }
+        }
+    }
+
+    impl HeapSize for MockRangeable {
+        fn heap_size(&self) -> usize {
+            self.heap_size
+        }
+    }
+
+    #[test]
+    fn ranges_have_correct_size() {
+        let range_from = MockRangeable::new(42)..;
+        let range_to = ..MockRangeable::new(42);
+        let range_to_inclusive = ..=MockRangeable::new(42);
+        let range = MockRangeable::new(42)..MockRangeable::new(43);
+        let range_inclusive = MockRangeable::new(42)..=MockRangeable::new(43);
+
+        assert_eq!(mem::size_of::<RangeFrom<MockRangeable>>() + 42,
+            range_from.mem_size());
+        assert_eq!(mem::size_of::<RangeTo<MockRangeable>>() + 42,
+            range_to.mem_size());
+        assert_eq!(mem::size_of::<RangeToInclusive<MockRangeable>>() + 42,
+            range_to_inclusive.mem_size());
+        assert_eq!(mem::size_of::<Range<MockRangeable>>() + 85,
+            range.mem_size());
+        assert_eq!(mem::size_of::<RangeInclusive<MockRangeable>>() + 85,
+            range_inclusive.mem_size());
     }
 }
