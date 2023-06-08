@@ -1014,7 +1014,7 @@ where
     }
 
     /// Sets the entry with the given key as most-recently-used, i.e. all other
-    /// entries currently contained in the cached will be dropped beore this
+    /// entries currently contained in the cached will be dropped before this
     /// one (unless others are touched/used afterwards). If there is no value
     /// associated with the given key, this method is no-op.
     ///
@@ -1783,7 +1783,7 @@ mod tests {
         // in addition to the size of the value in bytes (see test case
         // "entry_correctly_computes_size", value_str_bytes = 1).
         // On 16-bit arch, this would be 19 bytes.
-        // The numbers in this test case accomodate anywhere from 15 to 696
+        // The numbers in this test case accommodate anywhere from 15 to 696
         // extra bytes (676 * 3 + 15 = 2050, 676 * 2 + 696 = 2048).
         
         cache.insert("a".to_owned(), string_with_size(676)).unwrap();
@@ -2126,7 +2126,7 @@ mod tests {
     }
 
     #[test]
-    fn mutation_on_non_existant_element_is_never_called() {
+    fn mutation_on_non_existent_element_is_never_called() {
         let mut cache = LruCache::<&str, &str>::new(1024);
         let result = cache.mutate("hello", |_| { panic!("mutation was called") });
 
