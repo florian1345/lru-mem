@@ -304,7 +304,7 @@ impl<T: MemSize> HeapSize for [T] {
 
 impl<T: MemSize> MemSize for [T] {
     fn mem_size(&self) -> usize {
-        self.heap_size() + mem::size_of::<T>() * self.len()
+        self.heap_size() + mem::size_of_val(self)
     }
 }
 
