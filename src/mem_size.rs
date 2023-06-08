@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 
 /// A trait for types whose size on the heap can be determined at runtime. Note
 /// for all [Sized] types, it is sufficient to implement this trait, as a
-/// blanket implementation of [MemSize] is alread provided. The latter is
+/// blanket implementation of [MemSize] is already provided. The latter is
 /// required for the [LruCache](crate::LruCache) to track the size of its
 /// entries. It has implementations for most common data types and containers.
 ///
@@ -304,7 +304,7 @@ impl<T: MemSize> HeapSize for [T] {
 
 impl<T: MemSize> MemSize for [T] {
     fn mem_size(&self) -> usize {
-        self.heap_size() + mem::size_of::<T>() * self.len()
+        self.heap_size() + mem::size_of_val(self)
     }
 }
 
