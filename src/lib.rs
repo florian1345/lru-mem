@@ -2188,6 +2188,22 @@ mod tests {
     }
 
     #[test]
+    fn shrinking_large_cache_decreases_capacity() {
+        let mut cache = LruCache::with_capacity(1024, 256);
+        cache.shrink_to(64);
+
+        assert!(cache.capacity() < 256);
+        assert!(cache.capacity() >= 64);
+
+        cache.insert("hey", "mercury").unwrap();
+        cache.insert("what's up", "saturn").unwrap();
+        cache.shrink_to_fit();
+
+        assert!(cache.capacity() < 64);
+        assert!(cache.capacity() >= 2);
+    }
+
+    #[test]
     fn cache_created_with_capacity_does_not_reallocate_before_capacity_is_reached() {
         let mut cache = LruCache::with_capacity(4096, 10);
         let capacity_before = cache.capacity();

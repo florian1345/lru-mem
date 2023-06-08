@@ -328,7 +328,7 @@ impl<K: MemSize, V: MemSize, S: MemSize> HeapSize for HashMap<K, V, S> {
         let element_heap_size = self.iter()
             .map(|(k, v)| k.heap_size() + v.heap_size())
             .sum::<usize>();
-        let key_value_size = mem::size_of::<K>() + mem::size_of::<V>();
+        let key_value_size = mem::size_of::<(K, V)>();
         let own_heap_size = self.capacity() * key_value_size;
 
         hasher_heap_size + element_heap_size + own_heap_size
@@ -354,9 +354,9 @@ impl<T: MemSize> HeapSize for BinaryHeap<T> {
     }
 }
 
-impl<T: MemSize> HeapSize for Box<T> {
+impl<T: MemSize + ?Sized> HeapSize for Box<T> {
     fn heap_size(&self) -> usize {
-        self.as_ref().mem_size()
+        T::mem_size(self.as_ref())
     }
 }
 
@@ -534,6 +534,10 @@ mod test {
     use super::*;
 
     const VEC_SIZE: usize = mem::size_of::<Vec<u8>>();
+    const STRING_SIZE: usize = mem::size_of::<String>();
+    const BOXED_SLICE_SIZE: usize = mem::size_of::<Box<[u8]>>();
+    const HASH_MAP_SIZE: usize = mem::size_of::<HashMap<u8, u8>>();
+    const HASH_SET_SIZE: usize = mem::size_of::<HashSet<u8>>();
 
     #[test]
     fn tuples_have_correct_size() {
@@ -558,10 +562,8 @@ mod test {
 
     #[test]
     fn strings_have_correct_size() {
-        let string_size = mem::size_of::<String>();
-
-        assert_eq!(11 + string_size, "hello world".to_owned().mem_size());
-        assert_eq!(26 + string_size,
+        assert_eq!(11 + STRING_SIZE, "hello world".to_owned().mem_size());
+        assert_eq!(26 + STRING_SIZE,
             "söme döüble byte chärs".to_owned().mem_size());
     }
 
@@ -592,5 +594,90 @@ mod test {
         let array = [vec![], Vec::<u64>::with_capacity(4)];
 
         assert_eq!(2 * VEC_SIZE + 32, array.mem_size());
+    }
+
+    #[test]
+    fn boxed_slices_with_primitive_entries_have_correct_size() {
+        let slice = vec![1u32, 2u32, 3u32, 4u32].into_boxed_slice();
+
+        assert_eq!(BOXED_SLICE_SIZE + 16, Box::mem_size(&slice));
+    }
+
+    #[test]
+    fn boxed_slices_with_complex_entries_have_correct_size() {
+        let slice =
+            vec![vec![], Vec::<u64>::with_capacity(4)].into_boxed_slice();
+
+        assert_eq!(BOXED_SLICE_SIZE + 2 * VEC_SIZE + 32, Box::mem_size(&slice));
+    }
+
+    #[test]
+    fn empty_hash_map_has_correct_size() {
+        let hash_map = HashMap::<String, String>::new();
+
+        assert_eq!(HASH_MAP_SIZE, hash_map.mem_size());
+    }
+
+    #[test]
+    fn hash_map_of_primitives_with_abnormal_alignment_has_correct_size() {
+        const ENTRY_SIZE: usize = mem::size_of::<(u8, u16)>();
+
+        let mut hash_map = HashMap::new();
+        hash_map.insert(0u8, 1u16);
+        hash_map.insert(1u8, 2u16);
+        hash_map.insert(2u8, 3u16);
+
+        let expected_size = ENTRY_SIZE * hash_map.capacity() + HASH_MAP_SIZE;
+
+        assert_eq!(expected_size, hash_map.mem_size());
+    }
+
+    #[test]
+    fn hash_map_of_complex_entries_has_correct_size() {
+        const ENTRY_SIZE: usize = mem::size_of::<(String, String)>();
+
+        let mut hash_map = HashMap::new();
+        hash_map.insert("hello".to_owned(), "world".to_owned());
+        hash_map.insert("greetings".to_owned(), "moon".to_owned());
+        hash_map.insert("ahoy".to_owned(), "mars".to_owned());
+
+        let number_of_chars = 31;
+        let expected_size =
+            ENTRY_SIZE * hash_map.capacity() + HASH_MAP_SIZE + number_of_chars;
+
+        assert_eq!(expected_size, hash_map.mem_size());
+    }
+
+    #[test]
+    fn empty_hash_set_has_correct_size() {
+        let hash_set = HashSet::<String>::new();
+
+        assert_eq!(HASH_SET_SIZE, hash_set.mem_size());
+    }
+
+    #[test]
+    fn hash_set_of_primitives_has_correct_size() {
+        let mut hash_set = HashSet::new();
+        hash_set.insert(1u16);
+        hash_set.insert(2u16);
+        hash_set.insert(3u16);
+
+        let expected_size = 2 * hash_set.capacity() + HASH_SET_SIZE;
+
+        assert_eq!(expected_size, hash_set.mem_size());
+    }
+
+    #[test]
+    fn hash_set_of_complex_entries_has_correct_size() {
+        let mut hash_set = HashSet::new();
+        hash_set.insert("hello".to_owned());
+        hash_set.insert("greetings".to_owned());
+        hash_set.insert("ahoy".to_owned());
+
+        let number_of_chars = 18;
+        let expected_size =
+            STRING_SIZE * hash_set.capacity() + HASH_SET_SIZE + number_of_chars;
+
+        assert_eq!(expected_size, hash_set.mem_size());
     }
 }
