@@ -418,7 +418,7 @@ impl HeapSize for OsStr {
 
 impl MemSize for OsStr {
     fn mem_size(&self) -> usize {
-        self.len()
+        mem::size_of_val(self)
     }
 }
 
@@ -504,7 +504,7 @@ impl HeapSize for Path {
 
 impl MemSize for Path {
     fn mem_size(&self) -> usize {
-        self.as_os_str().mem_size()
+        mem::size_of_val(self)
     }
 }
 
@@ -525,6 +525,7 @@ mod test {
     const HASH_SET_SIZE: usize = mem::size_of::<HashSet<u8>>();
     const BINARY_HEAP_SIZE: usize = mem::size_of::<BinaryHeap<u8>>();
     const STRING_RESULT_SIZE: usize = mem::size_of::<Result<String, String>>();
+    const PATH_BUF_SIZE: usize = mem::size_of::<PathBuf>();
 
     #[test]
     fn tuples_have_correct_size() {
@@ -872,5 +873,35 @@ mod test {
             range.mem_size());
         assert_eq!(mem::size_of::<RangeInclusive<MockRangeable>>() + 85,
             range_inclusive.mem_size());
+    }
+
+    #[test]
+    fn empty_path_has_correct_size() {
+        let path = Path::new("");
+
+        assert_eq!(0, path.mem_size());
+    }
+
+    #[test]
+    fn non_empty_path_has_correct_size() {
+        let path = Path::new("hello");
+        let os_str = OsStr::new("hello");
+
+        assert_eq!(os_str.mem_size(), path.mem_size());
+    }
+
+    #[test]
+    fn empty_path_buf_has_correct_size() {
+        let path_buf = PathBuf::new();
+
+        assert_eq!(PATH_BUF_SIZE, path_buf.mem_size());
+    }
+
+    #[test]
+    fn non_empty_path_buf_has_correct_size() {
+        let path_buf = PathBuf::from("hello/world");
+        let os_str = OsStr::new("hello/world");
+
+        assert_eq!(PATH_BUF_SIZE + os_str.mem_size(), path_buf.mem_size());
     }
 }
