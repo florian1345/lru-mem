@@ -662,7 +662,8 @@ where
     /// the hash table to be initialized.
     #[inline]
     unsafe fn remove_ptr(&mut self, entry: EntryPtr<K, V>) -> (K, V) {
-        let entry = self.remove_from_table(entry.get().key()).unwrap();
+        let bucket = entry.to_bucket(&self.table);
+        let entry = self.table.remove(bucket);
         self.remove_metadata(entry)
     }
 

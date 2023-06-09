@@ -2,6 +2,7 @@ use crate::MemSize;
 
 use std::mem::{self, MaybeUninit};
 use std::ptr;
+use hashbrown::raw::{Bucket, RawTable};
 
 /// Gets the memory an entry with the given key and value would occupy in an
 /// LRU cache, in bytes. This is also the function used internally, thus if the
@@ -190,6 +191,13 @@ impl<K, V> EntryPtr<K, V> {
         entry.next = ptr_clone;
 
         ptr
+    }
+
+    #[inline]
+    pub(crate) unsafe fn to_bucket(self, table: &RawTable<Entry<K, V>>) -> Bucket<Entry<K, V>> {
+        let offset = table.bucket(0).as_ptr() as usize - self.ptr as usize;
+        let index = offset / mem::size_of::<Entry<K, V>>();
+        table.bucket(index)
     }
 
     /// Safety: May never be dereferenced in any way (get, get_mut, move_to,
