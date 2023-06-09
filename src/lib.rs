@@ -2164,11 +2164,28 @@ mod tests {
     }
     
     #[test]
-    fn reserving_fails_on_overflow() {
+    fn reserving_fails_on_internal_overflow() {
         let mut cache = LruCache::new(1024);
         cache.insert("hello", "world").unwrap();
-    
-        assert!(cache.try_reserve(usize::MAX).is_err());
+
+        let try_reserve_result = cache.try_reserve(usize::MAX);
+
+        assert_eq!(Err(TryReserveError::CapacityOverflow), try_reserve_result);
+    }
+
+    #[test]
+    fn reserving_fails_on_external_overflow() {
+        // In this test, the number of entries does not overflow usize, but the
+        // number of bytes does. Hence, lru-mem does not raise an error, but
+        // hashbrown does.
+
+        let mut cache = LruCache::new(1024);
+        cache.insert("hello", "world").unwrap();
+        let additional = usize::MAX / mem::size_of::<Entry<&str, &str>>();
+
+        let try_reserve_result = cache.try_reserve(additional);
+
+        assert_eq!(Err(TryReserveError::CapacityOverflow), try_reserve_result);
     }
     
     #[test]
@@ -2312,5 +2329,33 @@ mod tests {
     
         assert_eq!(Some(&"hello"), iter.next());
         assert_eq!(None, iter.next());
+    }
+
+    #[test]
+    fn empty_cache_formats_for_debug_correctly() {
+        let cache = LruCache::<&str, &str>::new(1024);
+
+        assert_eq!("{}", format!("{:?}", cache));
+    }
+
+    #[test]
+    fn singleton_cache_formats_for_debug_correctly() {
+        let mut cache = LruCache::new(1024);
+        cache.insert("hello", "world").unwrap();
+
+        assert_eq!("{\"hello\": \"world\"}", format!("{:?}", cache));
+    }
+
+    #[test]
+    fn larger_cache_formats_for_debug_correctly() {
+        let mut cache = LruCache::new(1024);
+        cache.insert(2, 4).unwrap();
+        cache.insert(3, 9).unwrap();
+        cache.insert(5, 25).unwrap();
+        cache.insert(7, 49).unwrap();
+        cache.insert(11, 121).unwrap();
+        cache.touch(&2);
+
+        assert_eq!("{3: 9, 5: 25, 7: 49, 11: 121, 2: 4}", format!("{:?}", cache));
     }
 }
