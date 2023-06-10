@@ -386,8 +386,13 @@ impl<K, V, S> LruCache<K, V, S> {
     /// assert_eq!(0, cache.current_size());
     /// ```
     pub fn clear(&mut self) {
-        self.table.clear();
+        for entry in self.table.drain() {
+            unsafe { entry.drop(); }
+        }
+
         self.current_size = 0;
+        self.seal.get_mut().next = self.seal;
+        self.seal.get_mut().prev = self.seal;
     }
 
     /// Creates an iterator over the entries (keys and values) contained in
@@ -1987,6 +1992,8 @@ mod tests {
         cache.clear();
 
         assert!(cache.is_empty());
+        assert!(cache.peek_lru().is_none());
+        assert!(cache.peek_mru().is_none());
         assert!(cache.iter().next().is_none());
     }
     
