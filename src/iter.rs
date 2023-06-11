@@ -460,6 +460,8 @@ mod tests {
 
         assert_eq!(0, cache.len());
         assert_eq!(0, cache.current_size());
+        assert!(cache.peek_lru().is_none());
+        assert!(cache.peek_mru().is_none());
         assert!(cache.get("hello").is_none());
     }
 
