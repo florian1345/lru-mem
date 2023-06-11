@@ -204,3 +204,15 @@ fn clearing_does_not_leak_entries() {
 
     assert_eq!(LEN * 2, *drop_counter.borrow());
 }
+
+#[test]
+fn retain_does_not_leak_entries() {
+    const LEN: usize = 1024;
+
+    let (mut cache, drop_counter) = make_cache_with_drop_counter(LEN, 0, 128);
+
+    cache.retain(|key, _| key.id % 2 == 0);
+
+    // keys and values of half of the entries => 2 * 0.5 * LEN
+    assert_eq!(LEN, *drop_counter.borrow());
+}
