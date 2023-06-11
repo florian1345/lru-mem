@@ -1800,12 +1800,12 @@ mod tests {
         
         assert_eq!(expected_size, cache.current_size());
         assert_eq!(2, cache.len());
-        assert!(cache.get("a").is_none());
-        assert!(cache.get("b").is_some());
-        assert!(cache.get("c").is_some());
+        assert!(cache.peek("a").is_none());
+        assert!(cache.peek("b").is_some());
+        assert!(cache.peek("c").is_some());
         
-        assert_eq!("b", unsafe { cache.seal.get().prev.get().key() });
-        assert_eq!("c", unsafe { cache.seal.get().next.get().key() });
+        assert_eq!(Some("b"), cache.peek_lru().map(|(key, _)| key.as_str()));
+        assert_eq!(Some("c"), cache.peek_mru().map(|(key, _)| key.as_str()));
     }
     
     #[test]
@@ -2045,6 +2045,19 @@ mod tests {
         assert!(!cache.contains(&1));
         assert!(cache.contains(&4));
         assert!(cache.contains(&5));
+    }
+
+    #[test]
+    fn retain_sets_lru_and_mru_if_necessary() {
+        let mut cache = LruCache::new(1024);
+        cache.insert(1, 0).unwrap();
+        cache.insert(2, 0).unwrap();
+        cache.insert(3, 0).unwrap();
+        cache.insert(4, 0).unwrap();
+        cache.retain(|&k, _| k != 1 && k != 4);
+
+        assert_eq!(Some((&2, &0)), cache.peek_lru());
+        assert_eq!(Some((&3, &0)), cache.peek_mru());
     }
     
     #[test]
