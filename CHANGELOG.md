@@ -1,5 +1,14 @@
 # v0.2
 
+## v0.2.1
+
+* Implemented `MemSize` for `Box<T>` even if `T: Sized` is not satisfied
+* Improved performance of reallocation
+* Bump `hashbrown` to `0.14`
+* Fixed size estimation for `HashMap`, `Mutex`, and `RwLock`
+* Fixed automatic reallocation increasing capacity by a factor of 4 instead of 2
+* Fixed `LruCache::clear` not dropping entries and not resetting LRU and MRU
+
 ## v0.2.0
 
 * Introduced new API for `LruCache` to better match `HashMap`
