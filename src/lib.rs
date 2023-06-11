@@ -1395,7 +1395,7 @@ where
                 },
                 Err(returned_entry) => {
                     entry = returned_entry;
-                    self.reallocate(self.table.capacity() + 1);
+                    self.reallocate((self.table.capacity() * 2).max(1));
                     
                     // The seal pointer stays constant through reallocation, so
                     // only entry.next has to be set.
@@ -1913,6 +1913,20 @@ mod tests {
         cache.insert(key, value).unwrap();
     
         assert_eq!(3, cache.len());
+    }
+
+    #[test]
+    fn auto_reallocation_doubles_capacity() {
+        let mut cache = LruCache::with_capacity(4096, 10);
+        let capacity = cache.capacity();
+
+        for index in 0..capacity {
+            cache.insert(index, 0).unwrap();
+        }
+
+        cache.insert(capacity, 0).unwrap();
+
+        assert_eq!(2 * capacity, cache.capacity());
     }
     
     #[test]
