@@ -549,6 +549,33 @@ mod test {
     }
 
     #[test]
+    fn byte_vector_has_correct_size() {
+        assert_eq!(5 + VEC_SIZE, vec![0u8; 5].mem_size());
+    }
+
+    #[test]
+    fn boxed_byte_vector_has_correct_size() {
+        let box_size = mem::size_of::<Box<u8>>();
+        let vec = vec![Box::new(0u8); 5];
+        let expected_size = 5 + 5 * box_size + VEC_SIZE;
+
+        assert_eq!(expected_size, vec.mem_size());
+    }
+
+    #[test]
+    fn string_vector_has_correct_size() {
+        let vec = vec![
+            "hello".to_owned(),
+            "world".to_owned(),
+            "greetings".to_owned(),
+            "moon".to_owned()
+        ];
+        let expected_size = 23 + 4 * STRING_SIZE + VEC_SIZE;
+
+        assert_eq!(expected_size, vec.mem_size());
+    }
+
+    #[test]
     fn strings_have_correct_size() {
         assert_eq!(11 + STRING_SIZE, "hello world".to_owned().mem_size());
         assert_eq!(26 + STRING_SIZE,
