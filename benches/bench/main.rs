@@ -11,6 +11,7 @@ mod alloc;
 mod clone;
 mod drain;
 mod get;
+mod heap_size;
 mod insert;
 mod iter;
 mod peek;
@@ -29,19 +30,24 @@ const KIBI: usize = 1024;
 const MEBI: usize = KIBI * KIBI;
 const GIBI: usize = KIBI * MEBI;
 
-fn get_id(size: usize) -> String {
+pub(crate) fn get_id_with_suffixes(size: usize, one_suffix: &str, kibi_suffix: &str,
+        mebi_suffix: &str, gibi_suffix: &str) -> String {
     if size >= GIBI {
-        format!("{} GiB", size / GIBI)
+        format!("{}{}", size / GIBI, gibi_suffix)
     }
     else if size >= MEBI {
-        format!("{} MiB", size / MEBI)
+        format!("{}{}", size / MEBI, mebi_suffix)
     }
     else if size >= KIBI {
-        format!("{} KiB", size / KIBI)
+        format!("{}{}", size / KIBI, kibi_suffix)
     }
     else {
-        format!("{} B", size)
+        format!("{}{}", size, one_suffix)
     }
+}
+
+fn get_id(size: usize) -> String {
+    get_id_with_suffixes(size, " B", " KiB", " MiB", " GiB")
 }
 
 fn fill(cache: &mut LruCache<u64, String>, rng: &mut impl Rng) -> Vec<u64> {
@@ -116,6 +122,7 @@ criterion::criterion_group!(benches,
     clone::clone_benchmark,
     drain::drain_benchmark,
     get::get_benchmark,
+    heap_size::heap_size_benchmark,
     insert::insert_benchmark,
     iter::iter_benchmark,
     peek::peek_benchmark,
