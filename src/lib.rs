@@ -88,7 +88,7 @@ use entry::{Entry, EntryPtr, UnhingedEntry};
 pub use entry::entry_size;
 pub use error::{InsertError, MutateError, TryInsertError};
 pub use iter::{Drain, IntoIter, IntoKeys, IntoValues, Iter, Keys, Values};
-pub use mem_size::{HeapSize, MemSize};
+pub use mem_size::{HeapSize, MemSize, ValueSize};
 
 mod entry;
 mod error;
