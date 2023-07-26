@@ -548,10 +548,8 @@ impl<T: MemSize> HeapSize for Vec<T> {
 impl<K: MemSize, V: MemSize, S: MemSize> HeapSize for HashMap<K, V, S> {
     fn heap_size(&self) -> usize {
         let hasher_heap_size = self.hasher().heap_size();
-        // TODO use specialized impls
-        let element_heap_size = self.iter()
-            .map(|(k, v)| k.heap_size() + v.heap_size())
-            .sum::<usize>();
+        let element_heap_size = K::heap_size_sum_exact_size_iter(|| self.keys()) +
+            V::heap_size_sum_exact_size_iter(|| self.values());
         let key_value_size = mem::size_of::<(K, V)>();
         let own_heap_size = self.capacity() * key_value_size;
 
