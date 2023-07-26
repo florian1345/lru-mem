@@ -426,7 +426,49 @@ macro_rules! tuple_mem_size {
                 0 $(+ $ts.heap_size())+
             }
 
-            // TODO specialized impls
+            fn heap_size_sum_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+            where
+                Self: 'item,
+                Fun: Fn() -> Iter,
+                Iter: Iterator<Item = &'item Self>
+            {
+                tuple_mem_size!(
+                    @sum_iter_terms
+                    heap_size_sum_iter,
+                    make_iter,
+                    $($ts),+ ;
+                    ($($ts),+))
+            }
+
+            fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+            where
+                Self: 'item,
+                Fun: Fn() -> Iter,
+                Iter: ExactSizeIterator<Item = &'item Self>
+            {
+                tuple_mem_size!(
+                    @sum_iter_terms
+                    heap_size_sum_exact_size_iter,
+                    make_iter,
+                    $($ts),+ ;
+                    ($($ts),+))
+            }
+        }
+    };
+
+    ( @sum_iter_terms $sum_iter:ident, $make_iter: expr, $($ts: ident),+ ; $types: tt ) => {
+        0 $(+
+            $ts::$sum_iter(||
+                $make_iter().map(|tuple|
+                    tuple_mem_size!(@extract_from_tuple tuple, $ts, $types))))+
+    };
+
+    ( @extract_from_tuple $tuple: expr, $extracted: ident, ($($ts: ident),+) ) => {
+        {
+            #[allow(non_snake_case)]
+            #[allow(unused)]
+            let ($($ts,)+) = $tuple;
+            $extracted
         }
     };
 }
@@ -1118,5 +1160,52 @@ mod test {
         let os_str = OsStr::new("hello/world");
 
         assert_eq!(PATH_BUF_SIZE + os_str.mem_size(), path_buf.mem_size());
+    }
+
+    #[test]
+    fn tuple_heap_size_sum_iter_works_for_stack_types() {
+        type Tuple = (i32, bool, char);
+
+        let zero_heap_size_tuples = [
+            (1, true, 'a'),
+            (2, false, 'b')
+        ];
+
+        assert_eq!(0, Tuple::heap_size_sum_iter(|| zero_heap_size_tuples.iter()));
+        assert_eq!(0, Tuple::heap_size_sum_exact_size_iter(|| zero_heap_size_tuples.iter()));
+    }
+
+    #[test]
+    fn tuple_heap_size_sum_iter_works_for_allocating_types() {
+        type Tuple = (Vec<i32>, Box<bool>, char);
+
+        let zero_heap_size_tuples = [
+            (vec![1, 2], Box::new(true), 'a'),
+            (vec![3, 4, 5], Box::new(false), 'b')
+        ];
+
+        assert_eq!(22, Tuple::heap_size_sum_iter(|| zero_heap_size_tuples.iter()));
+        assert_eq!(22, Tuple::heap_size_sum_exact_size_iter(|| zero_heap_size_tuples.iter()));
+    }
+
+    #[test]
+    fn value_size_sum_iter_works_with_sized() {
+        let u32_sum = u32::value_size_sum_iter([1, 2, 3, 4].iter());
+        let string_sum = String::value_size_sum_iter(["a".to_owned(), "b".to_owned()].iter());
+
+        assert_eq!(16, u32_sum);
+        assert_eq!(STRING_SIZE * 2, string_sum);
+    }
+
+    #[test]
+    fn value_size_sum_iter_works_with_unsized() {
+        let arrays: Vec<Box<[u32]>> = vec![
+            Box::new([1]),
+            Box::new([2, 3])
+        ];
+        let sum =
+            <[u32]>::value_size_sum_iter(arrays.iter().map(|array| &**array));
+
+        assert_eq!(12, sum);
     }
 }
