@@ -37,6 +37,7 @@ use std::ops::{
     RangeToInclusive
 };
 use std::path::{Path, PathBuf};
+use std::slice::Iter as SliceIter;
 use std::sync::{Mutex, RwLock};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
@@ -520,6 +521,41 @@ impl<T: MemSize> HeapSize for [T] {
     }
 }
 
+struct SizedArrayFlatIterator<'item, T, I, const N: usize> {
+    current_section: SliceIter<'item, T>,
+    subsequent_sections: I
+}
+
+impl<'item, T, I, const N: usize> Iterator for SizedArrayFlatIterator<'item, T, I, N>
+where
+    I: ExactSizeIterator<Item = &'item [T; N]>
+{
+    type Item = &'item T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let item @ Some(_) = self.current_section.next() {
+            return item;
+        }
+
+        if let Some(next_section) = self.subsequent_sections.next() {
+            self.current_section = next_section.iter();
+            return self.next();
+        }
+
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.current_section.len() + self.subsequent_sections.len() * N;
+
+        (len, Some(len))
+    }
+}
+
+impl<'item, T, I, const N: usize> ExactSizeIterator for SizedArrayFlatIterator<'item, T, I, N>
+where
+    I: ExactSizeIterator<Item = &'item [T; N]> { }
+
 impl<T: MemSize, const N: usize> HeapSize for [T; N] {
     fn heap_size(&self) -> usize {
         self[..].heap_size()
@@ -534,7 +570,17 @@ impl<T: MemSize, const N: usize> HeapSize for [T; N] {
         <[T]>::heap_size_sum_iter(|| make_iter().map(|item| &item[..]))
     }
 
-    // TODO exact size iter
+    fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: ExactSizeIterator<Item = &'item Self>
+    {
+        T::heap_size_sum_exact_size_iter(|| SizedArrayFlatIterator {
+            current_section: SliceIter::default(),
+            subsequent_sections: make_iter()
+        })
+    }
 }
 
 impl<T: MemSize> HeapSize for Vec<T> {
@@ -1184,6 +1230,48 @@ mod test {
 
         assert_eq!(22, Tuple::heap_size_sum_iter(|| zero_heap_size_tuples.iter()));
         assert_eq!(22, Tuple::heap_size_sum_exact_size_iter(|| zero_heap_size_tuples.iter()));
+    }
+
+    #[test]
+    fn array_heap_size_sum_iter_works_for_zero_heap_size_type() {
+        type Array = [u32; 3];
+
+        let arrays = [
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8, 9]
+        ];
+
+        assert_eq!(0, Array::heap_size_sum_iter(|| arrays.iter()));
+        assert_eq!(0, Array::heap_size_sum_exact_size_iter(|| arrays.iter()));
+    }
+
+    #[test]
+    fn array_heap_size_sum_iter_works_for_constant_heap_size_type() {
+        type Array = [Box<u32>; 3];
+
+        let arrays = [
+            [Box::new(1), Box::new(2), Box::new(3)],
+            [Box::new(4), Box::new(5), Box::new(6)],
+            [Box::new(7), Box::new(8), Box::new(9)]
+        ];
+
+        assert_eq!(36, Array::heap_size_sum_iter(|| arrays.iter()));
+        assert_eq!(36, Array::heap_size_sum_exact_size_iter(|| arrays.iter()));
+    }
+
+    #[test]
+    fn array_heap_size_sum_iter_works_for_variable_heap_size_type() {
+        type Array = [Vec<u32>; 2];
+
+        let arrays = [
+            [vec![1, 2], vec![3]],
+            [vec![], vec![4, 5, 6]],
+            [vec![7], vec![8, 9, 10]]
+        ];
+
+        assert_eq!(40, Array::heap_size_sum_iter(|| arrays.iter()));
+        assert_eq!(40, Array::heap_size_sum_exact_size_iter(|| arrays.iter()));
     }
 
     #[test]
