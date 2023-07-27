@@ -37,6 +37,7 @@ use std::ops::{
     RangeToInclusive
 };
 use std::path::{Path, PathBuf};
+use std::slice::Iter as SliceIter;
 use std::sync::{Mutex, RwLock};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
@@ -113,9 +114,9 @@ use std::time::{Duration, Instant};
 /// ```
 pub trait HeapSize {
 
-    /// The size of the referenced data that is owned by this value, usually
-    /// allocated on the heap (such as the value of a [Box] or the elements and
-    /// reserved memory of a [Vec]).
+    /// The size of the referenced data that is owned by this value in bytes,
+    /// usually allocated on the heap (such as the value of a [Box] or the
+    /// elements and reserved memory of a [Vec]).
     ///
     /// # Example
     ///
@@ -126,6 +127,165 @@ pub trait HeapSize {
     /// assert_eq!(12, "hello world!".to_owned().heap_size());
     /// ```
     fn heap_size(&self) -> usize;
+
+    /// The total sum of the sizes of referenced data that is owned by a value
+    /// in an iterator constructed with the given constructor, in bytes. This is
+    /// default-implemented by computing [HeapSize::heap_size] on every element
+    /// and summing them. In some cases, specialized implementations may be more
+    /// performant. This is common for types which do not allocate any memory at
+    /// all, where this function can be implemented by a constant zero.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::HeapSize;
+    ///
+    /// let boxes: [Box<i32>; 3] = [Box::new(1), Box::new(2), Box::new(3)];
+    /// assert_eq!(8, Box::<i32>::heap_size_sum_iter(|| boxes.iter().filter(|item| ***item > 1)));
+    /// ```
+    fn heap_size_sum_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: Iterator<Item = &'item Self>
+    {
+        make_iter().map(HeapSize::heap_size).sum()
+    }
+
+    /// The total sum of the sizes of referenced data that is owned by a value
+    /// in an exact-size-iterator constructed with the given constructor, in
+    /// bytes. This is default-implemented by using
+    /// [HeapSize::heap_size_sum_iter]. In some cases, specialized
+    /// implementations relying on the iterator's size may be more performant.
+    /// This is common for types which allocate a constant amount of memory,
+    /// where this function can multiply the iterator's length.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::HeapSize;
+    ///
+    /// let boxes: [Box<i32>; 3] = [Box::new(1), Box::new(2), Box::new(3)];
+    ///
+    /// assert_eq!(12, Box::<i32>::heap_size_sum_exact_size_iter(|| boxes.iter()));
+    /// ```
+    fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: ExactSizeIterator<Item = &'item Self>
+    {
+        Self::heap_size_sum_iter(make_iter)
+    }
+}
+
+/// A trait for types whose value size can be determined at runtime. This only
+/// refers to the size of the value itself, not allocated data. For [Sized]
+/// types, this is equivalent to [mem::size_of], which is provided by a blanket
+/// implementation. For unsized types, [mem::size_of_val] can be used.
+///
+/// # Example
+///
+/// ```
+/// use lru_mem::ValueSize;
+/// use std::mem;
+///
+/// // unsized type
+/// struct FlaggedBytes {
+///     flag: bool,
+///     bytes: [u8]
+/// }
+///
+/// impl ValueSize for FlaggedBytes {
+///     fn value_size(&self) -> usize {
+///         // This is a valid implementation for all unsized types
+///         mem::size_of_val(self)
+///     }
+/// }
+/// ```
+pub trait ValueSize {
+
+    /// The size of this value in bytes, excluding allocated data.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::ValueSize;
+    /// use std::mem;
+    ///
+    /// let boxed = Box::new([0u8; 64]);
+    ///
+    /// assert_eq!(mem::size_of::<*const ()>(), boxed.value_size());
+    /// ```
+    fn value_size(&self) -> usize;
+
+    /// The total sum of the sizes of all values in the given iterator, in
+    /// bytes. This is default-implemented by computing [ValueSize::value_size]
+    /// on every element and summing them. For [Sized] types, a more potentially
+    /// efficient implementation using [Iterator::count] is provided. If you are
+    /// implementing this trait manually, it is unlikely to be more efficient to
+    /// provide a manual implementation here.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::ValueSize;
+    ///
+    /// let nums: [i32; 3] = [1, 2, 3];
+    ///
+    /// assert_eq!(8, i32::value_size_sum_iter(nums.iter().filter(|item| **item > 1)));
+    /// ```
+    fn value_size_sum_iter<'item>(iterator: impl Iterator<Item = &'item Self>) -> usize
+    where
+        Self: 'item
+    {
+        iterator.map(ValueSize::value_size).sum()
+    }
+
+    /// The total sum of the sizes of all values in the given
+    /// exact-size-iterator, in bytes. This is default-implemented by using
+    /// [ValueSize::value_size_sum_iter]. For [Sized] types, a usually more
+    /// efficient implementation using [ExactSizeIterator::len] is provided. If
+    /// you are implementing this trait manually, it is unlikely to be more
+    /// efficient to provide a manual implementation here.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use lru_mem::ValueSize;
+    ///
+    /// let nums: [i32; 3] = [1, 2, 3];
+    ///
+    /// assert_eq!(12, i32::value_size_sum_exact_size_iter(nums.iter()));
+    /// ```
+    fn value_size_sum_exact_size_iter<'item>(iterator: impl ExactSizeIterator<Item = &'item Self>)
+        -> usize
+    where
+        Self: 'item
+    {
+        Self::value_size_sum_iter(iterator)
+    }
+}
+
+impl<T: Sized> ValueSize for T {
+    fn value_size(&self) -> usize {
+        mem::size_of::<Self>()
+    }
+
+    fn value_size_sum_iter<'item>(iterator: impl Iterator<Item = &'item Self>) -> usize
+    where
+        Self: 'item
+    {
+        mem::size_of::<Self>() * iterator.count()
+    }
+
+    fn value_size_sum_exact_size_iter<'item>(iterator: impl ExactSizeIterator<Item = &'item Self>)
+        -> usize
+    where
+        Self: 'item
+    {
+        mem::size_of::<Self>() * iterator.len()
+    }
 }
 
 /// A trait for types whose total size in memory can be determined at runtime.
@@ -136,43 +296,18 @@ pub trait HeapSize {
 /// this trait, as it is not clear whether a pointer will drop the referenced
 /// content when it is ejected from the cache.
 ///
-/// # Example
-///
-/// For [Sized] types, you do not need to implement this trait. Instead,
-/// implement [HeapSize].
-///
-/// Should your type not be [Sized], you need to account for both heap and
-/// value data. Consider as an example the implementation of [HeapSize] and
-/// `MemSize` on `[T]` for any type `T` that implements `MemSize`.
-///
-/// ```ignore
-/// use lru_mem::{HeapSize, MemSize};
-/// use std::mem;
-///
-/// impl<T: MemSize> HeapSize for [T] {
-///     fn heap_size(&self) -> usize {
-///         // Take the sum of the heap sizes of all elements in this array.
-///         self.iter().map(|t| t.heap_size()).sum()
-///     }
-/// }
-/// 
-/// impl<T: MemSize> MemSize for [T] {
-///     fn mem_size(&self) -> usize {
-///         // Take the total heap size of this array AND the memory allocated
-///         // for the element values itself.
-///         self.heap_size() + mem::size_of::<T>() * self.len()
-///     }
-/// }
-/// ```
-pub trait MemSize : HeapSize {
+/// This trait is blanked-implemented via the [HeapSize] and [ValueSize]
+/// traits. For [Sized] types, it suffices to implement [HeapSize], otherwise
+/// implement both [HeapSize] and [ValueSize]. This trait will be automatically
+/// implemented.
+pub trait MemSize : ValueSize + HeapSize {
 
     /// The total size of this value in bytes. This includes the value itself
     /// as well as all owned referenced data (such as the value on the heap of
     /// a [Box] or the elements and reserved memory of a [Vec]).
     ///
-    /// For [Sized] types, this is always implemented as adding [mem::size_of]
-    /// of `Self` to [HeapSize::heap_size]. Non-[Sized] types must provide a
-    /// custom implementation.
+    /// This function is blanket-implemented by adding [ValueSize::value_size]
+    /// and [HeapSize::heap_size] for any given value.
     ///
     /// # Example
     ///
@@ -187,9 +322,9 @@ pub trait MemSize : HeapSize {
     fn mem_size(&self) -> usize;
 }
 
-impl<T: Sized + HeapSize> MemSize for T {
+impl<T: HeapSize + ValueSize + ?Sized> MemSize for T {
     fn mem_size(&self) -> usize {
-        mem::size_of::<T>() + self.heap_size()
+        self.value_size() + self.heap_size()
     }
 }
 
@@ -197,6 +332,24 @@ macro_rules! basic_mem_size {
     ( $t: ty ) => {
         impl HeapSize for $t {
             fn heap_size(&self) -> usize {
+                0
+            }
+
+            fn heap_size_sum_iter<'item, Fun, Iter>(_make_iter: Fun) -> usize
+            where
+                Self: 'item,
+                Fun: Fn() -> Iter,
+                Iter: Iterator<Item = &'item Self>
+            {
+                0
+            }
+
+            fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(_make_iter: Fun) -> usize
+            where
+                Self: 'item,
+                Fun: Fn() -> Iter,
+                Iter: ExactSizeIterator<Item = &'item Self>
+            {
                 0
             }
         }
@@ -220,6 +373,10 @@ basic_mem_size!(f32);
 basic_mem_size!(f64);
 basic_mem_size!(bool);
 basic_mem_size!(char);
+
+basic_mem_size!(str);
+basic_mem_size!(CStr);
+basic_mem_size!(OsStr);
 
 basic_mem_size!(NonZeroU8);
 basic_mem_size!(NonZeroU16);
@@ -269,6 +426,50 @@ macro_rules! tuple_mem_size {
                 let ($($ts,)+) = self;
                 0 $(+ $ts.heap_size())+
             }
+
+            fn heap_size_sum_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+            where
+                Self: 'item,
+                Fun: Fn() -> Iter,
+                Iter: Iterator<Item = &'item Self>
+            {
+                tuple_mem_size!(
+                    @sum_iter_terms
+                    heap_size_sum_iter,
+                    make_iter,
+                    $($ts),+ ;
+                    ($($ts),+))
+            }
+
+            fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+            where
+                Self: 'item,
+                Fun: Fn() -> Iter,
+                Iter: ExactSizeIterator<Item = &'item Self>
+            {
+                tuple_mem_size!(
+                    @sum_iter_terms
+                    heap_size_sum_exact_size_iter,
+                    make_iter,
+                    $($ts),+ ;
+                    ($($ts),+))
+            }
+        }
+    };
+
+    ( @sum_iter_terms $sum_iter:ident, $make_iter: expr, $($ts: ident),+ ; $types: tt ) => {
+        0 $(+
+            $ts::$sum_iter(||
+                $make_iter().map(|tuple|
+                    tuple_mem_size!(@extract_from_tuple tuple, $ts, $types))))+
+    };
+
+    ( @extract_from_tuple $tuple: expr, $extracted: ident, ($($ts: ident),+) ) => {
+        {
+            #[allow(non_snake_case)]
+            #[allow(unused)]
+            let ($($ts,)+) = $tuple;
+            $extracted
         }
     };
 }
@@ -288,31 +489,97 @@ impl<T: MemSize> HeapSize for Wrapping<T> {
     fn heap_size(&self) -> usize {
         self.0.heap_size()
     }
+
+    fn heap_size_sum_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: Iterator<Item = &'item Self>
+    {
+        T::heap_size_sum_iter(|| make_iter().map(|item| &item.0))
+    }
+
+    fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: ExactSizeIterator<Item = &'item Self>
+    {
+        T::heap_size_sum_iter(|| make_iter().map(|item| &item.0))
+    }
 }
 
-fn sum_heap_size<'a, T, I>(iter: I) -> usize
-where
-    T: MemSize + 'a,
-    I: IntoIterator<Item = &'a T>
-{
-    iter.into_iter().map(|t| t.heap_size()).sum()
+impl<T> ValueSize for [T] {
+    fn value_size(&self) -> usize {
+        mem::size_of_val(self)
+    }
 }
 
 impl<T: MemSize> HeapSize for [T] {
     fn heap_size(&self) -> usize {
-        sum_heap_size(self)
+        T::heap_size_sum_exact_size_iter(|| self.iter())
     }
 }
 
-impl<T: MemSize> MemSize for [T] {
-    fn mem_size(&self) -> usize {
-        self.heap_size() + mem::size_of_val(self)
+struct SizedArrayFlatIterator<'item, T, I, const N: usize> {
+    current_section: SliceIter<'item, T>,
+    subsequent_sections: I
+}
+
+impl<'item, T, I, const N: usize> Iterator for SizedArrayFlatIterator<'item, T, I, N>
+where
+    I: ExactSizeIterator<Item = &'item [T; N]>
+{
+    type Item = &'item T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let item @ Some(_) = self.current_section.next() {
+            return item;
+        }
+
+        if let Some(next_section) = self.subsequent_sections.next() {
+            self.current_section = next_section.iter();
+            return self.next();
+        }
+
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.current_section.len() + self.subsequent_sections.len() * N;
+
+        (len, Some(len))
     }
 }
+
+impl<'item, T, I, const N: usize> ExactSizeIterator for SizedArrayFlatIterator<'item, T, I, N>
+where
+    I: ExactSizeIterator<Item = &'item [T; N]> { }
 
 impl<T: MemSize, const N: usize> HeapSize for [T; N] {
     fn heap_size(&self) -> usize {
         self[..].heap_size()
+    }
+
+    fn heap_size_sum_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: Iterator<Item = &'item Self>
+    {
+        <[T]>::heap_size_sum_iter(|| make_iter().map(|item| &item[..]))
+    }
+
+    fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: ExactSizeIterator<Item = &'item Self>
+    {
+        T::heap_size_sum_exact_size_iter(|| SizedArrayFlatIterator {
+            current_section: SliceIter::default(),
+            subsequent_sections: make_iter()
+        })
     }
 }
 
@@ -327,9 +594,8 @@ impl<T: MemSize> HeapSize for Vec<T> {
 impl<K: MemSize, V: MemSize, S: MemSize> HeapSize for HashMap<K, V, S> {
     fn heap_size(&self) -> usize {
         let hasher_heap_size = self.hasher().heap_size();
-        let element_heap_size = self.iter()
-            .map(|(k, v)| k.heap_size() + v.heap_size())
-            .sum::<usize>();
+        let element_heap_size = K::heap_size_sum_exact_size_iter(|| self.keys()) +
+            V::heap_size_sum_exact_size_iter(|| self.values());
         let key_value_size = mem::size_of::<(K, V)>();
         let own_heap_size = self.capacity() * key_value_size;
 
@@ -340,7 +606,7 @@ impl<K: MemSize, V: MemSize, S: MemSize> HeapSize for HashMap<K, V, S> {
 impl<T: MemSize, S: MemSize> HeapSize for HashSet<T, S> {
     fn heap_size(&self) -> usize {
         let hasher_heap_size = self.hasher().heap_size();
-        let element_heap_size = sum_heap_size(self);
+        let element_heap_size = T::heap_size_sum_exact_size_iter(|| self.iter());
         let own_heap_size = self.capacity() * mem::size_of::<T>();
 
         hasher_heap_size + element_heap_size + own_heap_size
@@ -349,7 +615,7 @@ impl<T: MemSize, S: MemSize> HeapSize for HashSet<T, S> {
 
 impl<T: MemSize> HeapSize for BinaryHeap<T> {
     fn heap_size(&self) -> usize {
-        let element_heap_size = sum_heap_size(self.iter());
+        let element_heap_size = T::heap_size_sum_exact_size_iter(|| self.iter());
         let own_heap_size = self.capacity() * mem::size_of::<T>();
 
         element_heap_size + own_heap_size
@@ -359,6 +625,26 @@ impl<T: MemSize> HeapSize for BinaryHeap<T> {
 impl<T: MemSize + ?Sized> HeapSize for Box<T> {
     fn heap_size(&self) -> usize {
         T::mem_size(self.as_ref())
+    }
+
+    fn heap_size_sum_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: Iterator<Item = &'item Self>
+    {
+        T::heap_size_sum_iter(|| make_iter().map(|item| &**item)) +
+            T::value_size_sum_iter(make_iter().map(|item| &**item))
+    }
+
+    fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+    where
+        Self: 'item,
+        Fun: Fn() -> Iter,
+        Iter: ExactSizeIterator<Item = &'item Self>
+    {
+        T::heap_size_sum_exact_size_iter(|| make_iter().map(|item| &**item)) +
+            T::value_size_sum_exact_size_iter(make_iter().map(|item| &**item))
     }
 }
 
@@ -374,15 +660,9 @@ impl<T: MemSize> HeapSize for RwLock<T> {
     }
 }
 
-impl HeapSize for str {
-    fn heap_size(&self) -> usize {
-        0
-    }
-}
-
-impl MemSize for str {
-    fn mem_size(&self) -> usize {
-        self.len()
+impl ValueSize for str {
+    fn value_size(&self) -> usize {
+        mem::size_of_val(self)
     }
 }
 
@@ -392,15 +672,9 @@ impl HeapSize for String {
     }
 }
 
-impl HeapSize for CStr {
-    fn heap_size(&self) -> usize {
-        0
-    }
-}
-
-impl MemSize for CStr {
-    fn mem_size(&self) -> usize {
-        self.to_bytes_with_nul().len()
+impl ValueSize for CStr {
+    fn value_size(&self) -> usize {
+        mem::size_of_val(self)
     }
 }
 
@@ -410,14 +684,8 @@ impl HeapSize for CString {
     }
 }
 
-impl HeapSize for OsStr {
-    fn heap_size(&self) -> usize {
-        0
-    }
-}
-
-impl MemSize for OsStr {
-    fn mem_size(&self) -> usize {
+impl ValueSize for OsStr {
+    fn value_size(&self) -> usize {
         mem::size_of_val(self)
     }
 }
@@ -502,8 +770,8 @@ impl HeapSize for Path {
     }
 }
 
-impl MemSize for Path {
-    fn mem_size(&self) -> usize {
+impl ValueSize for Path {
+    fn value_size(&self) -> usize {
         mem::size_of_val(self)
     }
 }
@@ -541,8 +809,14 @@ mod test {
             vec!['a', 'b', 'c', 'd', 'e', 'f'].mem_size());
         assert_eq!(24 + 4 * VEC_SIZE,
             vec![vec![], vec![1u64, 2u64], vec![3u64]].mem_size());
+    }
 
+    #[test]
+    fn vectors_estimate_spare_capacity() {
         let mut vec = Vec::with_capacity(8);
+
+        assert_eq!(64 + VEC_SIZE, vec.mem_size());
+
         vec.push(1.0f64);
 
         assert_eq!(64 + VEC_SIZE, vec.mem_size());
@@ -930,5 +1204,94 @@ mod test {
         let os_str = OsStr::new("hello/world");
 
         assert_eq!(PATH_BUF_SIZE + os_str.mem_size(), path_buf.mem_size());
+    }
+
+    #[test]
+    fn tuple_heap_size_sum_iter_works_for_stack_types() {
+        type Tuple = (i32, bool, char);
+
+        let zero_heap_size_tuples = [
+            (1, true, 'a'),
+            (2, false, 'b')
+        ];
+
+        assert_eq!(0, Tuple::heap_size_sum_iter(|| zero_heap_size_tuples.iter()));
+        assert_eq!(0, Tuple::heap_size_sum_exact_size_iter(|| zero_heap_size_tuples.iter()));
+    }
+
+    #[test]
+    fn tuple_heap_size_sum_iter_works_for_allocating_types() {
+        type Tuple = (Vec<i32>, Box<bool>, char);
+
+        let zero_heap_size_tuples = [
+            (vec![1, 2], Box::new(true), 'a'),
+            (vec![3, 4, 5], Box::new(false), 'b')
+        ];
+
+        assert_eq!(22, Tuple::heap_size_sum_iter(|| zero_heap_size_tuples.iter()));
+        assert_eq!(22, Tuple::heap_size_sum_exact_size_iter(|| zero_heap_size_tuples.iter()));
+    }
+
+    #[test]
+    fn array_heap_size_sum_iter_works_for_zero_heap_size_type() {
+        type Array = [u32; 3];
+
+        let arrays = [
+            [1, 2, 3],
+            [4, 5, 6],
+            [7, 8, 9]
+        ];
+
+        assert_eq!(0, Array::heap_size_sum_iter(|| arrays.iter()));
+        assert_eq!(0, Array::heap_size_sum_exact_size_iter(|| arrays.iter()));
+    }
+
+    #[test]
+    fn array_heap_size_sum_iter_works_for_constant_heap_size_type() {
+        type Array = [Box<u32>; 3];
+
+        let arrays = [
+            [Box::new(1), Box::new(2), Box::new(3)],
+            [Box::new(4), Box::new(5), Box::new(6)],
+            [Box::new(7), Box::new(8), Box::new(9)]
+        ];
+
+        assert_eq!(36, Array::heap_size_sum_iter(|| arrays.iter()));
+        assert_eq!(36, Array::heap_size_sum_exact_size_iter(|| arrays.iter()));
+    }
+
+    #[test]
+    fn array_heap_size_sum_iter_works_for_variable_heap_size_type() {
+        type Array = [Vec<u32>; 2];
+
+        let arrays = [
+            [vec![1, 2], vec![3]],
+            [vec![], vec![4, 5, 6]],
+            [vec![7], vec![8, 9, 10]]
+        ];
+
+        assert_eq!(40, Array::heap_size_sum_iter(|| arrays.iter()));
+        assert_eq!(40, Array::heap_size_sum_exact_size_iter(|| arrays.iter()));
+    }
+
+    #[test]
+    fn value_size_sum_iter_works_with_sized() {
+        let u32_sum = u32::value_size_sum_iter([1, 2, 3, 4].iter());
+        let string_sum = String::value_size_sum_iter(["a".to_owned(), "b".to_owned()].iter());
+
+        assert_eq!(16, u32_sum);
+        assert_eq!(STRING_SIZE * 2, string_sum);
+    }
+
+    #[test]
+    fn value_size_sum_iter_works_with_unsized() {
+        let arrays: Vec<Box<[u32]>> = vec![
+            Box::new([1]),
+            Box::new([2, 3])
+        ];
+        let sum =
+            <[u32]>::value_size_sum_iter(arrays.iter().map(|array| &**array));
+
+        assert_eq!(12, sum);
     }
 }

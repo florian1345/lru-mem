@@ -25,7 +25,9 @@ where
 pub(crate) fn heap_size_benchmark(c: &mut Criterion) {
     heap_size_benchmark_with(|| 0u8, crate::CONSTANT_TIME_SIZES, "heap_size/Vec/u8", c);
     heap_size_benchmark_with(
-        || Box::new(0u8), crate::CONSTANT_TIME_SIZES, "heap_size/Vec/Box<u8>", c);
+        || Box::new(0u8), crate::CONSTANT_TIME_SIZES, "heap_size/Vec/Box", c);
     heap_size_benchmark_with(
         || String::from("hello"), crate::LINEAR_TIME_SIZES, "heap_size/Vec/String", c);
+    heap_size_benchmark_with(
+        || [Box::new(0u8), Box::new(1u8)], crate::CONSTANT_TIME_SIZES, "heap_size/Vec/Array", c);
 }
