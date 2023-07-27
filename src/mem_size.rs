@@ -505,7 +505,7 @@ impl<T: MemSize> HeapSize for Wrapping<T> {
         Fun: Fn() -> Iter,
         Iter: ExactSizeIterator<Item = &'item Self>
     {
-        T::heap_size_sum_iter(|| make_iter().map(|item| &item.0))
+        T::heap_size_sum_exact_size_iter(|| make_iter().map(|item| &item.0))
     }
 }
 
@@ -787,6 +787,7 @@ mod test {
     use super::*;
 
     const VEC_SIZE: usize = mem::size_of::<Vec<u8>>();
+    const BOX_SIZE: usize = mem::size_of::<Box<u8>>();
     const STRING_SIZE: usize = mem::size_of::<String>();
     const BOXED_SLICE_SIZE: usize = mem::size_of::<Box<[u8]>>();
     const HASH_MAP_SIZE: usize = mem::size_of::<HashMap<u8, u8>>();
@@ -829,9 +830,8 @@ mod test {
 
     #[test]
     fn boxed_byte_vector_has_correct_size() {
-        let box_size = mem::size_of::<Box<u8>>();
         let vec = vec![Box::new(0u8); 5];
-        let expected_size = 5 + 5 * box_size + VEC_SIZE;
+        let expected_size = 5 + 5 * BOX_SIZE + VEC_SIZE;
 
         assert_eq!(expected_size, vec.mem_size());
     }
@@ -874,6 +874,18 @@ mod test {
         let wrapping = Wrapping(0u64);
 
         assert_eq!(8, wrapping.mem_size());
+    }
+
+    #[test]
+    fn wrapping_have_correct_sum_iter_size() {
+        let wrappings = [
+            Wrapping(Box::new(0u64)),
+            Wrapping(Box::new(1u64)),
+            Wrapping(Box::new(2u64))
+        ];
+
+        assert_eq!(24, Wrapping::<Box<u64>>::heap_size_sum_iter(|| wrappings.iter()));
+        assert_eq!(24, Wrapping::<Box<u64>>::heap_size_sum_exact_size_iter(|| wrappings.iter()));
     }
 
     #[test]
@@ -1291,7 +1303,32 @@ mod test {
         ];
         let sum =
             <[u32]>::value_size_sum_iter(arrays.iter().map(|array| &**array));
+        let sum_exact_size =
+            <[u32]>::value_size_sum_exact_size_iter(arrays.iter().map(|array| &**array));
 
         assert_eq!(12, sum);
+        assert_eq!(12, sum_exact_size);
+    }
+
+    #[test]
+    fn vec_of_box_of_vec_has_correct_size() {
+        let vec = vec![
+            Box::new(vec![1u8, 2u8, 3u8, 4u8]),
+            Box::new(vec![5u8, 6u8, 7u8, 8u8, 9u8])
+        ];
+        let expected_size = 3 * VEC_SIZE + 2 * BOX_SIZE + 9;
+
+        assert_eq!(expected_size, vec.mem_size());
+    }
+
+    #[test]
+    fn vec_of_boxed_slices_has_correct_size() {
+        let vec: Vec<Box<[u64]>> = vec![
+            Box::new([1, 2, 3]),
+            Box::new([4, 5, 6, 7])
+        ];
+        let expected_size = VEC_SIZE + 2 * BOXED_SLICE_SIZE + 56;
+
+        assert_eq!(expected_size, vec.mem_size());
     }
 }
