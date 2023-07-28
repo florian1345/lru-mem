@@ -1369,4 +1369,16 @@ mod test {
 
         assert_eq!(expected_size, vec.mem_size());
     }
+
+    #[test]
+    fn boxes_of_vecs_have_correct_heap_size_sum_iter() {
+        let vec: Vec<Box<Vec<u8>>> = vec![
+            Box::new(vec![1, 2, 3]),
+            Box::new(vec![4, 5, 6])
+        ];
+        let expected_size = VEC_SIZE * 2 + 6;
+
+        assert_eq!(expected_size, Box::<Vec<u8>>::heap_size_sum_iter(|| vec.iter()));
+        assert_eq!(expected_size, Box::<Vec<u8>>::heap_size_sum_exact_size_iter(|| vec.iter()));
+    }
 }
