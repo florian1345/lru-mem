@@ -44,9 +44,10 @@ use std::time::{Duration, Instant};
 
 /// A trait for types whose size on the heap can be determined at runtime. Note
 /// for all [Sized] types, it is sufficient to implement this trait, as a
-/// blanket implementation of [MemSize] is already provided. The latter is
-/// required for the [LruCache](crate::LruCache) to track the size of its
-/// entries. It has implementations for most common data types and containers.
+/// blanket implementation of [ValueSize] and consequently [MemSize] is already
+/// provided. The latter is required for the [LruCache](crate::LruCache) to
+/// track the size of its entries. It has implementations for most common data
+/// types and containers.
 ///
 /// Note that reference-counting smart pointers deliberately do not implement
 /// this trait, as it is not clear whether a pointer will drop the referenced
@@ -56,7 +57,9 @@ use std::time::{Duration, Instant};
 ///
 /// For simple types which are stored completely in one memory location, such
 /// as primitive types or structs of such types, it usually suffices to
-/// implement this as a constant 0.
+/// implement this as a constant 0. In such cases, it is recommended to
+/// implement [HeapSize::heap_size_sum_iter] as well to improve performances of
+/// collections of your type.
 ///
 /// ```
 /// use lru_mem::HeapSize;
@@ -69,6 +72,15 @@ use std::time::{Duration, Instant};
 ///
 /// impl HeapSize for Vector2f {
 ///     fn heap_size(&self) -> usize {
+///         0
+///     }
+///
+///     fn heap_size_sum_iter<'item, Fun, Iter>(_make_iter: Fun) -> usize
+///     where
+///         Self: 'item,
+///         Fun: Fn() -> Iter,
+///         Iter: Iterator<Item = &'item Self>
+///     {
 ///         0
 ///     }
 /// }
@@ -109,6 +121,32 @@ use std::time::{Duration, Instant};
 ///     fn heap_size(&self) -> usize {
 ///         // The number of bytes reserved on the heap for UTF-8 data.
 ///         self.capacity()
+///     }
+/// }
+/// ```
+///
+/// For types with a constant, non-zero amount of allocated data,
+/// [HeapSize::heap_size_sum_exact_size_iter] can be implemented to improve
+/// performance of collections of this type with known size.
+///
+/// ```
+/// use lru_mem::HeapSize;
+/// use std::mem;
+///
+/// struct BoxedU32(Box<u32>);
+///
+/// impl HeapSize for BoxedU32 {
+///     fn heap_size(&self) -> usize {
+///         mem::size_of::<u32>()
+///     }
+///
+///     fn heap_size_sum_exact_size_iter<'item, Fun, Iter>(make_iter: Fun) -> usize
+///     where
+///         Self: 'item,
+///         Fun: Fn() -> Iter,
+///         Iter: ExactSizeIterator<Item=&'item Self>
+///     {
+///         mem::size_of::<u32>() * make_iter().len()
 ///     }
 /// }
 /// ```
@@ -298,7 +336,7 @@ impl<T: Sized> ValueSize for T {
 ///
 /// This trait is blanked-implemented via the [HeapSize] and [ValueSize]
 /// traits. For [Sized] types, it suffices to implement [HeapSize], otherwise
-/// implement both [HeapSize] and [ValueSize]. This trait will be automatically
+/// implement both [HeapSize] and [ValueSize]. This trait will automatically be
 /// implemented.
 pub trait MemSize : ValueSize + HeapSize {
 
@@ -415,7 +453,7 @@ basic_mem_size!(SocketAddr);
 
 basic_mem_size!(RandomState);
 
-macro_rules! tuple_mem_size {
+macro_rules! tuple_heap_size {
     ( $($ts: ident),+ ) => {
         impl<$($ts),+> HeapSize for ($($ts,)+)
         where
@@ -433,7 +471,7 @@ macro_rules! tuple_mem_size {
                 Fun: Fn() -> Iter,
                 Iter: Iterator<Item = &'item Self>
             {
-                tuple_mem_size!(
+                tuple_heap_size!(
                     @sum_iter_terms
                     heap_size_sum_iter,
                     make_iter,
@@ -447,7 +485,7 @@ macro_rules! tuple_mem_size {
                 Fun: Fn() -> Iter,
                 Iter: ExactSizeIterator<Item = &'item Self>
             {
-                tuple_mem_size!(
+                tuple_heap_size!(
                     @sum_iter_terms
                     heap_size_sum_exact_size_iter,
                     make_iter,
@@ -461,7 +499,7 @@ macro_rules! tuple_mem_size {
         0 $(+
             $ts::$sum_iter(||
                 $make_iter().map(|tuple|
-                    tuple_mem_size!(@extract_from_tuple tuple, $ts, $types))))+
+                    tuple_heap_size!(@extract_from_tuple tuple, $ts, $types))))+
     };
 
     ( @extract_from_tuple $tuple: expr, $extracted: ident, ($($ts: ident),+) ) => {
@@ -474,16 +512,16 @@ macro_rules! tuple_mem_size {
     };
 }
 
-tuple_mem_size!(A);
-tuple_mem_size!(A, B);
-tuple_mem_size!(A, B, C);
-tuple_mem_size!(A, B, C, D);
-tuple_mem_size!(A, B, C, D, E);
-tuple_mem_size!(A, B, C, D, E, F);
-tuple_mem_size!(A, B, C, D, E, F, G);
-tuple_mem_size!(A, B, C, D, E, F, G, H);
-tuple_mem_size!(A, B, C, D, E, F, G, H, I);
-tuple_mem_size!(A, B, C, D, E, F, G, H, I, J);
+tuple_heap_size!(A);
+tuple_heap_size!(A, B);
+tuple_heap_size!(A, B, C);
+tuple_heap_size!(A, B, C, D);
+tuple_heap_size!(A, B, C, D, E);
+tuple_heap_size!(A, B, C, D, E, F);
+tuple_heap_size!(A, B, C, D, E, F, G);
+tuple_heap_size!(A, B, C, D, E, F, G, H);
+tuple_heap_size!(A, B, C, D, E, F, G, H, I);
+tuple_heap_size!(A, B, C, D, E, F, G, H, I, J);
 
 impl<T: MemSize> HeapSize for Wrapping<T> {
     fn heap_size(&self) -> usize {
