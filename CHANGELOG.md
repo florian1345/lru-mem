@@ -1,3 +1,15 @@
+# v0.3
+
+## v0.3.0
+
+* Added `ValueSize` trait as a generalization of `std::mem::size_of`
+* Blanket-implemented `MemSize` for all `T: ValueSize + HeapSize`, implementing
+`MemSize` directly is now impossible
+* Added option for specialized size estimation methods for `Iterator`s and
+`ExactSizeIterator`s of items with allocated memory
+* Improved performance of various size estimations, especially in non-LTO
+profiles
+
 # v0.2
 
 ## v0.2.1
