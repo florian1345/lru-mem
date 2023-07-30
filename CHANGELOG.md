@@ -6,7 +6,7 @@
 * Blanket-implemented `MemSize` for all `T: ValueSize + HeapSize`, implementing
 `MemSize` directly is now impossible
 * Added option for specialized size estimation methods for `Iterator`s and
-`ExactSizeIterator`s of items
+`ExactSizeIterator`s of items with allocated memory
 * Improved performance of various size estimations, especially in non-LTO
 profiles
 
