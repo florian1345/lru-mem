@@ -1,5 +1,6 @@
-use std::iter::{self, Empty, Once};
+use std::iter::{self, Once};
 use std::time::{Duration, Instant};
+use std::array::IntoIter as ArrayIntoIter;
 use std::vec::IntoIter as VecIntoIter;
 
 use criterion::BenchmarkGroup;
@@ -14,19 +15,19 @@ pub(crate) trait KeysToRestore {
     fn keys(self) -> Self::KeyIter;
 }
 
-impl KeysToRestore for () {
-    type KeyIter = Empty<String>;
-
-    fn keys(self) -> Empty<String> {
-        iter::empty()
-    }
-}
-
 impl KeysToRestore for String {
     type KeyIter = Once<String>;
 
     fn keys(self) -> Once<String> {
         iter::once(self)
+    }
+}
+
+impl<const N: usize> KeysToRestore for [String; N] {
+    type KeyIter = ArrayIntoIter<String, N>;
+
+    fn keys(self) -> ArrayIntoIter<String, N> {
+        self.into_iter()
     }
 }
 
@@ -56,17 +57,29 @@ pub(crate) trait CacheBenchmarkGroup {
     /// with `size` elements on each iteration. As a second argument, a slice of
     /// all initial keys is provided. The cache is not repaired in any way after
     /// an iteration, so it is the routine's responsibility no to change the key
-    /// set.
-    fn bench_with_cache<O, R>(&mut self, routine: R, size: usize)
+    /// set. The max capacity is set to the current capacity after filling it
+    /// up.
+    fn bench_with_capped_cache<O, R>(&mut self, routine: R, size: usize)
     where
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O;
 
     /// Benchmarks the given `routine`, which is supplied with a mutable
     /// reference to the same `LruCache` on each iteration. Initially, the cache
-    /// is filled to the given `size`. After each iteration, every removed key,
-    /// as indicated by the [KeysToRestore] return value of the routine, is
-    /// restored. As a second argument, the routine gets a slice of all keys.
+    /// is filled to the given `size`. After each iteration, every removed key
+    /// or key whose entry was altered in a way that requires restoration, as
+    /// indicated by the [KeysToRestore] return value of the routine, is
+    /// regenerated. As a second argument, the routine gets a slice of all keys.
     fn bench_with_refilled_cache<O, R>(&mut self, routine: R, size: usize)
+    where
+        O: KeysToRestore,
+        R: FnMut(&mut LruCache<String, String>, &[String]) -> O;
+
+    /// Same as [CacheBenchmarkGroup::bench_with_refilled_cache], but in
+    /// addition, the cache is capped. That means that the max capacity is set
+    /// to the current capacity after filling it up. Any expansion/insertion
+    /// will lead to LRU ejection. This has to be considered when deciding
+    /// which [KeysToRestore].
+    fn bench_with_refilled_capped_cache<O, R>(&mut self, routine: R, size: usize)
     where
         O: KeysToRestore,
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O;
@@ -122,6 +135,40 @@ where
     }
 }
 
+fn bench_with_refilled_cache<O, R>(group: &mut BenchmarkGroup<'_, WallTime>,
+    mut routine: R, size: usize, cap: bool)
+where
+    O: KeysToRestore,
+    R: FnMut(&mut LruCache<String, String>, &[String]) -> O
+{
+    let id = crate::get_id(size);
+    let mut cache = LruCache::with_capacity(usize::MAX, size);
+    fill_to_size(&mut cache, size);
+    let keys = cache.keys().cloned().collect::<Vec<_>>();
+
+    if cap {
+        cache.set_max_size(cache.current_size());
+    }
+
+    group.bench_function(id, |bencher| bencher.iter_custom(|iter_count| {
+        let mut completed = 0;
+        let mut total = Duration::ZERO;
+
+        loop {
+            let before = Instant::now();
+            let keys_to_restore = routine(&mut cache, &keys);
+            total += before.elapsed();
+
+            restore_keys(&mut cache, keys_to_restore);
+            completed += 1;
+
+            if completed >= iter_count {
+                return total;
+            }
+        }
+    }));
+}
+
 impl<'a> CacheBenchmarkGroup for BenchmarkGroup<'a, WallTime> {
 
     fn bench_with_reset_cache<O, Rou, Res>(&mut self, mut routine: Rou,
@@ -149,45 +196,33 @@ impl<'a> CacheBenchmarkGroup for BenchmarkGroup<'a, WallTime> {
         }));
     }
 
-    fn bench_with_cache<O, R>(&mut self, mut routine: R, size: usize)
+    fn bench_with_capped_cache<O, R>(&mut self, mut routine: R, size: usize)
     where
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O
     {
         let id = crate::get_id(size);
         let mut cache = LruCache::with_capacity(usize::MAX, size);
         fill_to_size(&mut cache, size);
+        cache.set_max_size(cache.current_size());
         let keys = cache.keys().cloned().collect::<Vec<_>>();
 
         self.bench_function(id, |group| group.iter(|| routine(&mut cache, &keys)));
     }
 
-    fn bench_with_refilled_cache<O, R>(&mut self, mut routine: R, size: usize)
+    fn bench_with_refilled_cache<O, R>(&mut self, routine: R, size: usize)
     where
         O: KeysToRestore,
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O
     {
-        let id = crate::get_id(size);
-        let mut cache = LruCache::with_capacity(usize::MAX, size);
-        fill_to_size(&mut cache, size);
-        let keys = cache.keys().cloned().collect::<Vec<_>>();
+        bench_with_refilled_cache(self, routine, size, false)
+    }
 
-        self.bench_function(id, |bencher| bencher.iter_custom(|iter_count| {
-            let mut completed = 0;
-            let mut total = Duration::ZERO;
-
-            loop {
-                let before = Instant::now();
-                let keys_to_restore = routine(&mut cache, &keys);
-                total += before.elapsed();
-
-                restore_keys(&mut cache, keys_to_restore);
-                completed += 1;
-
-                if completed >= iter_count {
-                    return total;
-                }
-            }
-        }));
+    fn bench_with_refilled_capped_cache<O, R>(&mut self, routine: R, size: usize)
+    where
+        O: KeysToRestore,
+        R: FnMut(&mut LruCache<String, String>, &[String]) -> O
+    {
+        bench_with_refilled_cache(self, routine, size, true)
     }
 
     fn bench_with_depleted_cache<O, R>(&mut self, mut routine: R,
