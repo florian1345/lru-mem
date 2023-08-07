@@ -1,20 +1,14 @@
-use criterion::Criterion;
+use criterion::{black_box, Criterion};
 
-use lru_mem::LruCache;
-
-use rand::rngs::ThreadRng;
-
-fn run_clone_benchmark(cache: &mut LruCache<u64, String>, _: &[u64],
-        _: &mut ThreadRng) {
-    criterion::black_box(cache.clone());
-}
+use crate::bencher_extensions::CacheBenchmarkGroup;
 
 pub(crate) fn clone_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("clone");
     group.sample_size(100).measurement_time(crate::BENCH_DURATION);
 
     for &size in crate::LINEAR_TIME_SIZES {
-        crate::bench_cache_function(
-            &mut group, size, run_clone_benchmark);
+        group.bench_with_cache(&crate::get_id(size), |cache, _| {
+            black_box(cache.clone());
+        }, size);
     }
 }
