@@ -12,8 +12,7 @@ where
     T: HeapSize,
     F: Fn() -> T
 {
-    let mut group = c.benchmark_group(group_name);
-    group.sample_size(100).measurement_time(crate::BENCH_DURATION);
+    let mut group = crate::make_group(c, group_name);
 
     for &size in sizes {
         let value = iter::repeat_with(&make_value).take(size).collect::<Vec<_>>();

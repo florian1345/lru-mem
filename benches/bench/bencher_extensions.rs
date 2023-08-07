@@ -46,8 +46,8 @@ pub(crate) trait CacheBenchmarkGroup {
     /// the given `reset` function is called to reset the cache in a use-case
     /// specific manner. This prevents redundant cleanup steps for certain
     /// benchmarks.
-    fn bench_with_reset_cache<O, Rou, Res>(&mut self, id: &str, routine: Rou,
-        reset: Res, size: usize)
+    fn bench_with_reset_cache<O, Rou, Res>(&mut self, routine: Rou, reset: Res,
+        size: usize)
     where
         Rou: FnMut(&mut LruCache<String, String>) -> O,
         Res: FnMut(&mut LruCache<String, String>);
@@ -57,7 +57,7 @@ pub(crate) trait CacheBenchmarkGroup {
     /// all initial keys is provided. The cache is not repaired in any way after
     /// an iteration, so it is the routine's responsibility no to change the key
     /// set.
-    fn bench_with_cache<O, R>(&mut self, id: &str, routine: R, size: usize)
+    fn bench_with_cache<O, R>(&mut self, routine: R, size: usize)
     where
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O;
 
@@ -66,8 +66,7 @@ pub(crate) trait CacheBenchmarkGroup {
     /// is filled to the given `size`. After each iteration, every removed key,
     /// as indicated by the [KeysToRestore] return value of the routine, is
     /// restored. As a second argument, the routine gets a slice of all keys.
-    fn bench_with_refilled_cache<O, R>(&mut self, id: &str, routine: R,
-        size: usize)
+    fn bench_with_refilled_cache<O, R>(&mut self, routine: R, size: usize)
     where
         O: KeysToRestore,
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O;
@@ -77,8 +76,8 @@ pub(crate) trait CacheBenchmarkGroup {
     /// the cache be greater than `max_size` after any iteration, it will be
     /// depleted to `min_size` elements before the next iteration. The initial
     /// size of the cache is `min_size`.
-    fn bench_with_depleted_cache<O, R>(&mut self, id: &str, routine: R,
-        min_size: usize, max_size: usize)
+    fn bench_with_depleted_cache<O, R>(&mut self, routine: R, min_size: usize,
+        max_size: usize)
     where
         R: FnMut(&mut LruCache<String, String>) -> O;
 }
@@ -125,12 +124,13 @@ where
 
 impl<'a> CacheBenchmarkGroup for BenchmarkGroup<'a, WallTime> {
 
-    fn bench_with_reset_cache<O, Rou, Res>(&mut self, id: &str,
-        mut routine: Rou, mut reset: Res, size: usize)
+    fn bench_with_reset_cache<O, Rou, Res>(&mut self, mut routine: Rou,
+        mut reset: Res, size: usize)
     where
         Rou: FnMut(&mut LruCache<String, String>) -> O,
         Res: FnMut(&mut LruCache<String, String>)
     {
+        let id = crate::get_id(size);
         let mut cache = LruCache::with_capacity(usize::MAX, size);
 
         self.bench_function(id, |group| group.iter_custom(|iter_count| {
@@ -149,10 +149,11 @@ impl<'a> CacheBenchmarkGroup for BenchmarkGroup<'a, WallTime> {
         }));
     }
 
-    fn bench_with_cache<O, R>(&mut self, id: &str, mut routine: R, size: usize)
+    fn bench_with_cache<O, R>(&mut self, mut routine: R, size: usize)
     where
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O
     {
+        let id = crate::get_id(size);
         let mut cache = LruCache::with_capacity(usize::MAX, size);
         fill_to_size(&mut cache, size);
         let keys = cache.keys().cloned().collect::<Vec<_>>();
@@ -160,12 +161,12 @@ impl<'a> CacheBenchmarkGroup for BenchmarkGroup<'a, WallTime> {
         self.bench_function(id, |group| group.iter(|| routine(&mut cache, &keys)));
     }
 
-    fn bench_with_refilled_cache<O, R>(&mut self, id: &str, mut routine: R,
-        size: usize)
+    fn bench_with_refilled_cache<O, R>(&mut self, mut routine: R, size: usize)
     where
         O: KeysToRestore,
         R: FnMut(&mut LruCache<String, String>, &[String]) -> O
     {
+        let id = crate::get_id(size);
         let mut cache = LruCache::with_capacity(usize::MAX, size);
         fill_to_size(&mut cache, size);
         let keys = cache.keys().cloned().collect::<Vec<_>>();
@@ -189,11 +190,12 @@ impl<'a> CacheBenchmarkGroup for BenchmarkGroup<'a, WallTime> {
         }));
     }
 
-    fn bench_with_depleted_cache<O, R>(&mut self, id: &str, mut routine: R,
+    fn bench_with_depleted_cache<O, R>(&mut self, mut routine: R,
         min_size: usize, max_size: usize)
     where
         R: FnMut(&mut LruCache<String, String>) -> O
     {
+        let id = crate::get_id(max_size);
         let mut cache = LruCache::with_capacity(usize::MAX, max_size);
         fill_to_size(&mut cache, min_size);
 

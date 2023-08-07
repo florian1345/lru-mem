@@ -1,4 +1,6 @@
 use std::time::Duration;
+use criterion::{BenchmarkGroup, Criterion};
+use criterion::measurement::WallTime;
 
 mod alloc;
 mod clone;
@@ -14,13 +16,9 @@ mod bencher_extensions;
 
 const KIBI: usize = 1024;
 const MEBI: usize = KIBI * KIBI;
-const GIBI: usize = KIBI * MEBI;
 
 pub(crate) fn get_id(size: usize) -> String {
-    if size >= GIBI {
-        format!("{}G", size / GIBI)
-    }
-    else if size >= MEBI {
+    if size >= MEBI {
         format!("{}M", size / MEBI)
     }
     else if size >= KIBI {
@@ -29,6 +27,16 @@ pub(crate) fn get_id(size: usize) -> String {
     else {
         format!("{}", size)
     }
+}
+
+pub(crate) fn make_group<'criterion>(c: &'criterion mut Criterion, name: &str)
+        -> BenchmarkGroup<'criterion, WallTime> {
+    const BENCH_DURATION: Duration = Duration::from_secs(15);
+    const SAMPLE_SIZE: usize = 100;
+
+    let mut group = c.benchmark_group(name);
+    group.sample_size(SAMPLE_SIZE).measurement_time(BENCH_DURATION);
+    group
 }
 
 const LINEAR_TIME_SIZES: &'static [usize] = &[
@@ -44,8 +52,6 @@ const CONSTANT_TIME_SIZES: &'static [usize] = &[
     256 * 1024,
     4 * 1024 * 1024
 ];
-
-const BENCH_DURATION: Duration = Duration::from_secs(15);
 
 criterion::criterion_group!(benches,
     alloc::alloc_benchmark,
