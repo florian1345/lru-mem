@@ -3,7 +3,7 @@ use criterion::Criterion;
 use crate::bencher_extensions::CacheBenchmarkGroup;
 
 pub(crate) fn insert_benchmark(c: &mut Criterion) {
-    let group = crate::make_group(c, "insert");
+    let mut group = crate::make_group(c, "insert");
 
     for &size in crate::CONSTANT_TIME_SIZES {
         let mut key_idx: u32 = 0;

@@ -4,7 +4,7 @@ use rand::Rng;
 use crate::bencher_extensions::CacheBenchmarkGroup;
 
 pub(crate) fn peek_benchmark(c: &mut Criterion) {
-    let group = crate::make_group(c, "peek");
+    let mut group = crate::make_group(c, "peek");
     let mut rng = rand::thread_rng();
 
     for &size in crate::CONSTANT_TIME_SIZES {

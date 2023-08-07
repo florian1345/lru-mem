@@ -12,7 +12,7 @@ where
     T: HeapSize,
     F: Fn() -> T
 {
-    let group = crate::make_group(c, group_name);
+    let mut group = crate::make_group(c, group_name);
 
     for &size in sizes {
         let value = iter::repeat_with(&make_value).take(size).collect::<Vec<_>>();

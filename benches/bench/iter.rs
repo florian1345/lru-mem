@@ -3,7 +3,7 @@ use criterion::Criterion;
 use crate::bencher_extensions::CacheBenchmarkGroup;
 
 pub(crate) fn iter_benchmark(c: &mut Criterion) {
-    let group = crate::make_group(c, "iter");
+    let mut group = crate::make_group(c, "iter");
 
     for &size in crate::LINEAR_TIME_SIZES {
         group.bench_with_cache(|cache, _| {

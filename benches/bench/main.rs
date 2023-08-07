@@ -30,11 +30,13 @@ pub(crate) fn get_id(size: usize) -> String {
 }
 
 pub(crate) fn make_group<'criterion>(c: &'criterion mut Criterion, name: &str)
-        -> &'criterion mut BenchmarkGroup<'criterion, WallTime> {
+        -> BenchmarkGroup<'criterion, WallTime> {
     const BENCH_DURATION: Duration = Duration::from_secs(15);
     const SAMPLE_SIZE: usize = 100;
 
-    c.benchmark_group(name).sample_size(SAMPLE_SIZE).measurement_time(BENCH_DURATION)
+    let mut group = c.benchmark_group(name);
+    group.sample_size(SAMPLE_SIZE).measurement_time(BENCH_DURATION);
+    group
 }
 
 const LINEAR_TIME_SIZES: &'static [usize] = &[

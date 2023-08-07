@@ -4,7 +4,7 @@ use rand::Rng;
 use crate::bencher_extensions::CacheBenchmarkGroup;
 
 pub(crate) fn remove_benchmark(c: &mut Criterion) {
-    let group = crate::make_group(c, "remove");
+    let mut group = crate::make_group(c, "remove");
     let mut rng = rand::thread_rng();
 
     for &size in crate::CONSTANT_TIME_SIZES {
