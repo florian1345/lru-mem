@@ -9,6 +9,7 @@ mod get;
 mod heap_size;
 mod insert;
 mod iter;
+mod mutate;
 mod peek;
 mod remove;
 mod retain;
@@ -59,8 +60,11 @@ criterion::criterion_group!(benches,
     drain::drain_benchmark,
     get::get_benchmark,
     heap_size::heap_size_benchmark,
-    insert::insert_benchmark,
+    insert::insert_no_eject_benchmark,
+    insert::insert_eject_benchmark,
     iter::iter_benchmark,
+    mutate::mutate_no_eject_benchmark,
+    mutate::mutate_eject_benchmark,
     peek::peek_benchmark,
     remove::remove_benchmark,
     retain::retain_benchmark,
