@@ -1,7 +1,10 @@
-use criterion::{black_box, Criterion};
-use lru_mem::HeapSize;
 use std::iter;
-use crate::get_id_with_suffixes;
+
+use criterion::{black_box, Criterion};
+
+use lru_mem::HeapSize;
+
+use crate::get_id;
 
 fn heap_size_benchmark_with<T, F>(make_value: F, sizes: &[usize], group_name: &str,
     c: &mut Criterion)
@@ -14,7 +17,7 @@ where
 
     for &size in sizes {
         let value = iter::repeat_with(&make_value).take(size).collect::<Vec<_>>();
-        let id = get_id_with_suffixes(size, "", "K", "M", "G");
+        let id = get_id(size);
         group.bench_function(id, |b| b.iter(|| {
             let heap_size = value.heap_size();
             black_box(heap_size);

@@ -1,25 +1,17 @@
 use criterion::Criterion;
-
-use lru_mem::LruCache;
-
 use rand::Rng;
-use rand::rngs::ThreadRng;
 
-fn run_remove_benchmark(cache: &mut LruCache<u64, String>, keys: &[u64],
-        _: &mut ThreadRng) {
-    let mut rng = rand::thread_rng();
-    let remove_index = rng.gen_range(0..keys.len());
-    let key = keys[remove_index];
-    let value = cache.remove(&key).unwrap();
-    cache.insert(key, value).unwrap();
-}
+use crate::bencher_extensions::CacheBenchmarkGroup;
 
 pub(crate) fn remove_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("remove");
     group.sample_size(100).measurement_time(crate::BENCH_DURATION);
+    let mut rng = rand::thread_rng();
 
     for &size in crate::CONSTANT_TIME_SIZES {
-        crate::bench_cache_function(
-            &mut group, size, run_remove_benchmark);
+        group.bench_with_refilled_cache(&crate::get_id(size), |cache, keys| {
+            let key_index = rng.gen_range(0..keys.len());
+            cache.remove_entry(&keys[key_index]).unwrap().0
+        }, size);
     }
 }
